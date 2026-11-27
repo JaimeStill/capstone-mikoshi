@@ -21,42 +21,62 @@ import (
 var files embed.FS
 
 type store struct {
-	db          *data.Database
-	objects     *storage.Store
-	stmts       *query.Statements
-	findRows    query.Rows[Item]
-	uploadRows  query.Rows[Item]
-	list        query.Projection[Item]
-	covered     query.Projection[Item]
-	create      query.Returning[Item]
-	touchBlob   query.Returning[blobRow]
-	createBlob  query.Statement
-	markBlob    query.Statement
-	placeRef    query.Statement
-	withdrawRef query.Statement
-	claimStale  query.Rows[string]
-	reclaimBlob query.Statement
+	db            *data.Database
+	objects       *storage.Store
+	stmts         *query.Statements
+	findRows      query.Rows[Item]
+	uploadRows    query.Rows[Item]
+	list          query.Projection[Item]
+	covered       query.Projection[Item]
+	create        query.Returning[Item]
+	touchBlob     query.Returning[blobRow]
+	createBlob    query.Statement
+	markBlob      query.Statement
+	placeRef      query.Statement
+	withdrawRef   query.Statement
+	claimStale    query.Rows[string]
+	reclaimBlob   query.Statement
+	touchItemBlob query.Statement
+	deleteRefs    query.Statement
+	deleteItem    query.Statement
+	claimOrphan   query.Rows[string]
+	sourceTexts   query.Rows[string]
+	deleteOccurs  query.Statement
+	orphanChunks  query.Rows[string]
+	deleteChunks  query.Statement
+	deleteEmbeds  query.Statement
+	dropOrphan    query.Statement
 }
 
 func newStore(db *data.Database, objects *storage.Store) *store {
 	stmts := db.Catalog.MustCompile(files, "statements", db.Dialect())
 	scan := query.Scanner[Item]()
 	s := &store{
-		db:          db,
-		objects:     objects,
-		stmts:       stmts,
-		findRows:    stmts.Statement("find").Scan(scan),
-		uploadRows:  stmts.Statement("find_upload").Scan(scan),
-		list:        stmts.Statement("list").Project(scan),
-		covered:     stmts.Statement("covered").Project(scan),
-		create:      stmts.Statement("create").Returning(scan),
-		touchBlob:   stmts.Statement("touch_blob").Returning(query.Scanner[blobRow]()),
-		createBlob:  stmts.Statement("create_blob"),
-		markBlob:    stmts.Statement("mark_blob"),
-		placeRef:    stmts.Statement("place"),
-		withdrawRef: stmts.Statement("withdraw"),
-		claimStale:  stmts.Statement("claim_stale_blob").Scan(query.Scalar[string]),
-		reclaimBlob: stmts.Statement("reclaim_blob"),
+		db:            db,
+		objects:       objects,
+		stmts:         stmts,
+		findRows:      stmts.Statement("find").Scan(scan),
+		uploadRows:    stmts.Statement("find_upload").Scan(scan),
+		list:          stmts.Statement("list").Project(scan),
+		covered:       stmts.Statement("covered").Project(scan),
+		create:        stmts.Statement("create").Returning(scan),
+		touchBlob:     stmts.Statement("touch_blob").Returning(query.Scanner[blobRow]()),
+		createBlob:    stmts.Statement("create_blob"),
+		markBlob:      stmts.Statement("mark_blob"),
+		placeRef:      stmts.Statement("place"),
+		withdrawRef:   stmts.Statement("withdraw"),
+		claimStale:    stmts.Statement("claim_stale_blob").Scan(query.Scalar[string]),
+		reclaimBlob:   stmts.Statement("reclaim_blob"),
+		touchItemBlob: stmts.Statement("touch_item_blob"),
+		deleteRefs:    stmts.Statement("delete_references"),
+		deleteItem:    stmts.Statement("delete"),
+		claimOrphan:   stmts.Statement("claim_orphan_blob").Scan(query.Scalar[string]),
+		sourceTexts:   stmts.Statement("source_texts").Scan(query.Scalar[string]),
+		deleteOccurs:  stmts.Statement("delete_occurrences"),
+		orphanChunks:  stmts.Statement("orphan_chunk_texts").Scan(query.Scalar[string]),
+		deleteChunks:  stmts.Statement("delete_orphan_chunks"),
+		deleteEmbeds:  stmts.Statement("delete_orphan_embeddings"),
+		dropOrphan:    stmts.Statement("reclaim_orphan_blob"),
 	}
 	db.Register("items", stmts, s)
 	return s
@@ -174,6 +194,27 @@ func (s *store) place(ctx context.Context, contextID, itemID string) error {
 		}
 		return fmt.Errorf("%w: %s", ErrContextNotFound, contextID)
 	}
+	return err
+}
+
+func (s *store) delete(ctx context.Context, id string) error {
+	_, err := s.db.Transact(ctx, func(tx *sqlate.Tx) (struct{}, error) {
+		args := query.Args{"id": id}
+		if _, err := s.touchItemBlob.Exec(ctx, tx, args); err != nil {
+			return struct{}{}, err
+		}
+		if _, err := s.deleteRefs.Exec(ctx, tx, args); err != nil {
+			return struct{}{}, err
+		}
+		n, err := s.deleteItem.Exec(ctx, tx, args)
+		if err != nil {
+			return struct{}{}, err
+		}
+		if n == 0 {
+			return struct{}{}, sql.ErrNoRows
+		}
+		return struct{}{}, nil
+	}, nil)
 	return err
 }
 

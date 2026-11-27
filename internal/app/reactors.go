@@ -10,6 +10,7 @@ import (
 const (
 	reclaimExpiredUploads = "expired_uploads"
 	reclaimPendingBlobs   = "pending_blobs"
+	reclaimOrphanBlobs    = "orphan_blobs"
 )
 
 func defineReactors(g *graph.Graph, n *Nodes) {
@@ -32,6 +33,11 @@ func (n *Nodes) newSweeper(s *graph.Scope) (*sweep.Sweeper, error) {
 			Name:      reclaimPendingBlobs,
 			Reclaimer: s.Use(n.Items).PendingReclaimer(cfg.Sweep.PendingBlobs.StaleAge.Duration()),
 			Policy:    policy(cfg.Sweep.PendingBlobs.SweepPolicy),
+		},
+		{
+			Name:      reclaimOrphanBlobs,
+			Reclaimer: s.Use(n.Items).OrphanReclaimer(cfg.Sweep.OrphanBlobs.StaleAge.Duration()),
+			Policy:    policy(cfg.Sweep.OrphanBlobs.SweepPolicy),
 		},
 	}
 	return sweep.New(s.Use(n.SQL).DB, regs, cfg.ShutdownTimeout.Duration(), s.Use(n.Logger),

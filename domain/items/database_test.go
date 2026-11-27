@@ -954,3 +954,166 @@ func TestPendingReclaimer_PassKeepsTheRowWhenTheObjectDeleteFails(t *testing.T) 
 		t.Error("the object is gone although the delete failed")
 	}
 }
+
+func TestService_DeleteTouchesTheBlobThenDeletesTheReferencesAndTheItem(t *testing.T) {
+	f := service(t, affected(1), affected(2), affected(1))
+	if err := f.service.Delete(t.Context(), itemID); err != nil {
+		t.Fatal(err)
+	}
+	sameOps(t, f.rec, begin, x, x, x, commit)
+	calls := f.rec.Calls()
+	for i, want := range []string{
+		"UPDATE blob SET updated_at = CURRENT_TIMESTAMP WHERE sha256 = (SELECT i.sha256 FROM item i WHERE i.id = CAST($1 AS uuid))",
+		"DELETE FROM context_item WHERE item_id = CAST($1 AS uuid)",
+		"DELETE FROM item WHERE id = CAST($1 AS uuid)",
+	} {
+		if !strings.HasPrefix(strings.Join(strings.Fields(calls[i+1].SQL), " "), want) || !slices.Equal(calls[i+1].Args, []any{itemID}) {
+			t.Errorf("statement %d = %+v, want %q over the item's id", i, calls[i+1], want)
+		}
+	}
+}
+
+func TestService_DeleteRefusals(t *testing.T) {
+	f := service(t)
+	if err := f.service.Delete(t.Context(), "x"); !errors.Is(err, items.ErrValidation) {
+		t.Errorf("Delete = %v, want ErrValidation", err)
+	}
+	sameOps(t, f.rec)
+
+	f = service(t, affected(0), affected(0), affected(0))
+	if err := f.service.Delete(t.Context(), itemID); !errors.Is(err, sql.ErrNoRows) {
+		t.Errorf("Delete = %v, want sql.ErrNoRows", err)
+	}
+	sameOps(t, f.rec, begin, x, x, x, rollback)
+}
+
+func texts(values ...string) sqltest.Response {
+	rows := make([][]driver.Value, len(values))
+	for i, v := range values {
+		rows[i] = []driver.Value{v}
+	}
+	return sqltest.Response{Columns: []string{"text_sha256"}, Rows: rows}
+}
+
+var (
+	sourceText = strings.Repeat("a", 64)
+	chunkText  = strings.Repeat("b", 64)
+)
+
+func TestOrphanReclaimer_PassDeletesTheObjectTheContentsRecordsThenTheRow(t *testing.T) {
+	f := service(t, staleRow(pdf), texts(sourceText), affected(1), texts(chunkText), affected(1), affected(1), affected(1), none())
+	putObject(t, f, pdf)
+	more, err := f.service.OrphanReclaimer(24*time.Hour).Pass(t.Context(), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if more {
+		t.Error("more = true after the claim found no further orphan, want false")
+	}
+	sameOps(t, f.rec, begin, q, q, x, q, x, x, x, commit, begin, q, commit)
+	if hasObject(t, f, pdf) {
+		t.Error("the orphaned blob's object is still stored")
+	}
+
+	claims := callsTo(f.rec, "SELECT sha256 FROM blob")
+	if len(claims) != 2 {
+		t.Fatalf("claims = %+v, want two", claims)
+	}
+	for _, want := range []string{"status = 'available'", "updated_at < CURRENT_TIMESTAMP - CAST($1 AS interval)", "NOT EXISTS (SELECT 1 FROM item", "ORDER BY updated_at", "FETCH FIRST 1 ROWS ONLY", "FOR UPDATE SKIP LOCKED"} {
+		if !strings.Contains(claims[0].SQL, want) {
+			t.Errorf("claim = %q, want it to contain %q", claims[0].SQL, want)
+		}
+	}
+	if !slices.Equal(claims[0].Args, []any{24 * time.Hour}) {
+		t.Errorf("claim args = %v, want the stale age", claims[0].Args)
+	}
+
+	byDigest := []any{digest(pdf)}
+	if c := callsTo(f.rec, "SELECT DISTINCT text_sha256 FROM source"); len(c) != 1 || !slices.Equal(c[0].Args, byDigest) {
+		t.Errorf("source texts read = %+v, want one by the digest", c)
+	}
+	if c := callsTo(f.rec, "DELETE FROM source_occurrence"); len(c) != 1 || !strings.Contains(c[0].SQL, "input_sha256 = $1") || !slices.Equal(c[0].Args, byDigest) {
+		t.Errorf("occurrence delete = %+v, want the content's occurrences as an input", c)
+	}
+	if c := callsTo(f.rec, "SELECT DISTINCT c.text_sha256 FROM chunk"); len(c) != 1 || !reflect.DeepEqual(c[0].Args, []any{[]string{sourceText}}) {
+		t.Errorf("chunk texts read = %+v, want one over the source texts", c)
+	}
+	chunks := callsTo(f.rec, "DELETE FROM chunk")
+	if len(chunks) != 1 || !strings.Contains(chunks[0].SQL, "NOT EXISTS (SELECT 1 FROM source s WHERE s.text_sha256 = chunk.source_text_sha256)") || !reflect.DeepEqual(chunks[0].Args, []any{[]string{sourceText}}) {
+		t.Errorf("chunk delete = %+v, want the chunks of the source texts no remaining source names", chunks)
+	}
+	embeds := callsTo(f.rec, "DELETE FROM embedding")
+	if len(embeds) != 1 || !strings.Contains(embeds[0].SQL, "NOT EXISTS (SELECT 1 FROM chunk c WHERE c.text_sha256 = embedding.chunk_text_sha256)") || !reflect.DeepEqual(embeds[0].Args, []any{[]string{chunkText}}) {
+		t.Errorf("embedding delete = %+v, want the embeddings of the chunk texts no remaining chunk names", embeds)
+	}
+	if del := callsTo(f.rec, "DELETE FROM blob"); len(del) != 1 || !strings.Contains(del[0].SQL, "status = 'available'") || !slices.Equal(del[0].Args, byDigest) {
+		t.Errorf("row delete = %+v, want the claimed available row deleted by its digest", del)
+	}
+}
+
+func TestOrphanReclaimer_PassWithoutSourcesDeletesTheRow(t *testing.T) {
+	f := service(t, staleRow(pdf), texts(), affected(0), affected(1), none())
+	if more, err := f.service.OrphanReclaimer(time.Hour).Pass(t.Context(), 10); err != nil || more {
+		t.Fatalf("Pass = %t, %v; want no more and no error", more, err)
+	}
+	sameOps(t, f.rec, begin, q, q, x, x, commit, begin, q, commit)
+	if c := callsTo(f.rec, "DELETE FROM chunk"); len(c) != 0 {
+		t.Errorf("chunk delete = %+v, want none when the content yielded no source", c)
+	}
+}
+
+func TestOrphanReclaimer_PassWithoutOrphanedChunksLeavesTheEmbeddings(t *testing.T) {
+	f := service(t, staleRow(pdf), texts(sourceText), affected(1), texts(), affected(0), affected(1), none())
+	if more, err := f.service.OrphanReclaimer(time.Hour).Pass(t.Context(), 10); err != nil || more {
+		t.Fatalf("Pass = %t, %v; want no more and no error", more, err)
+	}
+	sameOps(t, f.rec, begin, q, q, x, q, x, x, commit, begin, q, commit)
+	if c := callsTo(f.rec, "DELETE FROM embedding"); len(c) != 0 {
+		t.Errorf("embedding delete = %+v, want none when no chunk went", c)
+	}
+}
+
+func TestOrphanReclaimer_PassStopsAtTheBudget(t *testing.T) {
+	other := []byte("%PDF-1.7\nanother orphaned blob\n%%EOF\n")
+	f := service(t, staleRow(pdf), texts(), affected(0), affected(1), staleRow(other), texts(), affected(0), affected(1))
+	putObject(t, f, pdf)
+	putObject(t, f, other)
+	more, err := f.service.OrphanReclaimer(time.Hour).Pass(t.Context(), 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !more {
+		t.Error("more = false after reclaiming the whole budget, want true")
+	}
+	sameOps(t, f.rec, begin, q, q, x, x, commit, begin, q, q, x, x, commit)
+	if hasObject(t, f, pdf) || hasObject(t, f, other) {
+		t.Error("a reclaimed blob's object is still stored")
+	}
+}
+
+func TestOrphanReclaimer_PassWithNothingOrphanedChangesNothing(t *testing.T) {
+	f := service(t, none())
+	putObject(t, f, pdf)
+	if more, err := f.service.OrphanReclaimer(time.Hour).Pass(t.Context(), 10); err != nil || more {
+		t.Fatalf("Pass = %t, %v; want no more and no error", more, err)
+	}
+	sameOps(t, f.rec, begin, q, commit)
+	if !hasObject(t, f, pdf) {
+		t.Error("an object was deleted with no orphan claimed")
+	}
+}
+
+func TestOrphanReclaimer_PassKeepsEverythingWhenTheObjectDeleteFails(t *testing.T) {
+	f := service(t, staleRow(pdf))
+	putObject(t, f, pdf)
+	f.fake.SetDown(true)
+	more, err := f.service.OrphanReclaimer(time.Hour).Pass(t.Context(), 10)
+	if !errors.Is(err, storage.ErrUnavailable) || more {
+		t.Errorf("Pass = %t, %v; want no more and the object delete's failure", more, err)
+	}
+	sameOps(t, f.rec, begin, q, rollback)
+	f.fake.SetDown(false)
+	if !hasObject(t, f, pdf) {
+		t.Error("the object is gone although the delete failed")
+	}
+}

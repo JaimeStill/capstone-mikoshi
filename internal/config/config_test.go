@@ -486,6 +486,12 @@ func TestSweep_FinalizeDefaults(t *testing.T) {
 	if got := s.PendingBlobs.StaleAge.Duration(); got != time.Hour {
 		t.Errorf("PendingBlobs.StaleAge = %s, want 1h", got)
 	}
+	if got := s.OrphanBlobs.Interval.Duration(); got != 15*time.Minute || *s.OrphanBlobs.Budget != 100 {
+		t.Errorf("OrphanBlobs = {%s %d}, want {15m 100}", got, *s.OrphanBlobs.Budget)
+	}
+	if got := s.OrphanBlobs.StaleAge.Duration(); got != 24*time.Hour {
+		t.Errorf("OrphanBlobs.StaleAge = %s, want 24h", got)
+	}
 	if s.Env != (config.SweepEnv{}) {
 		t.Errorf("Sweep.Env = %+v, want empty under the empty prefix", s.Env)
 	}
@@ -501,6 +507,8 @@ func TestSweep_MergeOverlaysSetFields(t *testing.T) {
 	overlay.Sweep.ExpiredUploads.Budget = new(20)
 	overlay.Sweep.PendingBlobs.Interval = new(libconfig.Duration(time.Minute))
 	overlay.Sweep.PendingBlobs.StaleAge = new(libconfig.Duration(2 * time.Hour))
+	overlay.Sweep.OrphanBlobs.Budget = new(30)
+	overlay.Sweep.OrphanBlobs.StaleAge = new(libconfig.Duration(48 * time.Hour))
 
 	base.Merge(overlay)
 
@@ -514,6 +522,9 @@ func TestSweep_MergeOverlaysSetFields(t *testing.T) {
 	if got := s.PendingBlobs.StaleAge.Duration(); got != 2*time.Hour {
 		t.Errorf("PendingBlobs.StaleAge = %s, want 2h", got)
 	}
+	if s.OrphanBlobs.Interval != nil || *s.OrphanBlobs.Budget != 30 || s.OrphanBlobs.StaleAge.Duration() != 48*time.Hour {
+		t.Errorf("OrphanBlobs = {%v %d %s}, want {unset 30 48h}", s.OrphanBlobs.Interval, *s.OrphanBlobs.Budget, s.OrphanBlobs.StaleAge)
+	}
 }
 
 func TestSweep_FinalizeEnvOverrides(t *testing.T) {
@@ -522,6 +533,9 @@ func TestSweep_FinalizeEnvOverrides(t *testing.T) {
 	t.Setenv("MIKOSHI_SWEEP_PENDING_BLOBS_INTERVAL", "10m")
 	t.Setenv("MIKOSHI_SWEEP_PENDING_BLOBS_BUDGET", "7")
 	t.Setenv("MIKOSHI_SWEEP_PENDING_BLOBS_STALE_AGE", "90m")
+	t.Setenv("MIKOSHI_SWEEP_ORPHAN_BLOBS_INTERVAL", "2h")
+	t.Setenv("MIKOSHI_SWEEP_ORPHAN_BLOBS_BUDGET", "9")
+	t.Setenv("MIKOSHI_SWEEP_ORPHAN_BLOBS_STALE_AGE", "72h")
 
 	cfg := configtest.Minimal()
 	if err := cfg.Finalize("mikoshi"); err != nil {
@@ -538,12 +552,21 @@ func TestSweep_FinalizeEnvOverrides(t *testing.T) {
 	if got := s.PendingBlobs.StaleAge.Duration(); got != 90*time.Minute {
 		t.Errorf("PendingBlobs.StaleAge = %s, want 1h30m", got)
 	}
+	if got := s.OrphanBlobs.Interval.Duration(); got != 2*time.Hour || *s.OrphanBlobs.Budget != 9 {
+		t.Errorf("OrphanBlobs = {%s %d}, want {2h 9}", got, *s.OrphanBlobs.Budget)
+	}
+	if got := s.OrphanBlobs.StaleAge.Duration(); got != 72*time.Hour {
+		t.Errorf("OrphanBlobs.StaleAge = %s, want 72h", got)
+	}
 	want := config.SweepEnv{
 		ExpiredUploadsInterval: "MIKOSHI_SWEEP_EXPIRED_UPLOADS_INTERVAL",
 		ExpiredUploadsBudget:   "MIKOSHI_SWEEP_EXPIRED_UPLOADS_BUDGET",
 		PendingBlobsInterval:   "MIKOSHI_SWEEP_PENDING_BLOBS_INTERVAL",
 		PendingBlobsBudget:     "MIKOSHI_SWEEP_PENDING_BLOBS_BUDGET",
 		PendingBlobsStaleAge:   "MIKOSHI_SWEEP_PENDING_BLOBS_STALE_AGE",
+		OrphanBlobsInterval:    "MIKOSHI_SWEEP_ORPHAN_BLOBS_INTERVAL",
+		OrphanBlobsBudget:      "MIKOSHI_SWEEP_ORPHAN_BLOBS_BUDGET",
+		OrphanBlobsStaleAge:    "MIKOSHI_SWEEP_ORPHAN_BLOBS_STALE_AGE",
 	}
 	if s.Env != want {
 		t.Errorf("Sweep.Env = %+v, want %+v", s.Env, want)
@@ -562,6 +585,9 @@ func TestSweep_FinalizeRejectsInvalidPolicy(t *testing.T) {
 		"pending blobs budget negative":          {"MIKOSHI_SWEEP_PENDING_BLOBS_BUDGET", "-3", "pending_blobs.budget"},
 		"pending blobs stale age zero":           {"MIKOSHI_SWEEP_PENDING_BLOBS_STALE_AGE", "0s", "pending_blobs.stale_age"},
 		"pending blobs stale age not a duration": {"MIKOSHI_SWEEP_PENDING_BLOBS_STALE_AGE", "soon", "MIKOSHI_SWEEP_PENDING_BLOBS_STALE_AGE"},
+		"orphan blobs interval zero":             {"MIKOSHI_SWEEP_ORPHAN_BLOBS_INTERVAL", "0s", "orphan_blobs.interval"},
+		"orphan blobs budget zero":               {"MIKOSHI_SWEEP_ORPHAN_BLOBS_BUDGET", "0", "orphan_blobs.budget"},
+		"orphan blobs stale age negative":        {"MIKOSHI_SWEEP_ORPHAN_BLOBS_STALE_AGE", "-1h", "orphan_blobs.stale_age"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {

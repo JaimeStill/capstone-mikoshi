@@ -912,3 +912,74 @@ func TestItems_ContextCoverPages(t *testing.T) {
 		}
 	}
 }
+
+func blobUpdatedAt(t *testing.T, db *pgtest.Database, digest string) time.Time {
+	t.Helper()
+	var at time.Time
+	if err := db.Pool.QueryRowContext(t.Context(), "SELECT updated_at FROM blob WHERE sha256 = $1", digest).Scan(&at); err != nil {
+		t.Fatal(err)
+	}
+	return at
+}
+
+func TestItems_DeleteRemovesTheItemAndItsReferences(t *testing.T) {
+	name := bucketName()
+	db := integration.Database(t)
+	c := integration.Start(t, integration.Options{Database: db, Env: []string{"MIKOSHI_STORAGE_CONTAINER=" + name}}).Client()
+	deleted := postRecord(t, c, "shared")
+	kept := postRecord(t, c, "shared")
+	if deleted.SHA256 != kept.SHA256 {
+		t.Fatalf("items over %s and %s, want one blob", deleted.SHA256, kept.SHA256)
+	}
+	folder := createContext(t, c, explicit(contexts.Root, "folder"))
+	for _, ref := range []string{referencePath(folder.ID, deleted.ID), referencePath(contexts.Root, deleted.ID), referencePath(folder.ID, kept.ID)} {
+		c.Put(t, ref, nil).Expect(t, http.StatusNoContent)
+	}
+	if _, err := db.Pool.ExecContext(t.Context(), "UPDATE blob SET updated_at = now() - interval '1 day' WHERE sha256 = $1", deleted.SHA256); err != nil {
+		t.Fatal(err)
+	}
+	before := blobUpdatedAt(t, db, deleted.SHA256)
+
+	if res := c.Delete(t, "/api/items/"+deleted.ID).Expect(t, http.StatusNoContent); len(res.Body) != 0 {
+		t.Errorf("body = %s, want none", res.Body)
+	}
+	if p := c.Get(t, "/api/items/"+deleted.ID).Problem(t, http.StatusNotFound); p.Instance != "/api/items/"+deleted.ID {
+		t.Errorf("instance = %q, want the deleted item's path", p.Instance)
+	}
+	if n := countRows(t, db, "SELECT COUNT(*) FROM context_item WHERE item_id = $1", deleted.ID); n != 0 {
+		t.Errorf("references of the deleted item = %d, want none", n)
+	}
+	if n := countRows(t, db, "SELECT COUNT(*) FROM context_item WHERE item_id = $1", kept.ID); n != 1 {
+		t.Errorf("references of the other item = %d, want its one", n)
+	}
+	read := webtest.Decode[items.Item](t, c.Get(t, "/api/items/"+kept.ID), http.StatusOK)
+	if !sameItem(t, read, kept) {
+		t.Errorf("other item = %+v, want %+v", read, kept)
+	}
+	if got := covered(t, c, folder.ID); !slices.Equal(got, []string{kept.ID}) {
+		t.Errorf("folder covers %v, want only the other item", got)
+	}
+	if after := blobUpdatedAt(t, db, deleted.SHA256); !after.After(before) {
+		t.Errorf("blob updated_at = %s after the delete, want it moved past %s", after, before)
+	}
+	if got := objectOf(t, integration.Bucket(t, name), kept.SHA256); len(got) == 0 {
+		t.Error("the shared blob's object is gone, want it kept")
+	}
+
+	for _, r := range []struct {
+		name   string
+		path   string
+		status int
+	}{
+		{"a deleted item", "/api/items/" + deleted.ID, http.StatusNotFound},
+		{"an unknown item", "/api/items/" + uuid.NewV7().String(), http.StatusNotFound},
+		{"a malformed id", "/api/items/not-a-uuid", http.StatusBadRequest},
+	} {
+		if p := c.Delete(t, r.path).Problem(t, r.status); p.Instance != r.path {
+			t.Errorf("%s: instance = %q, want %s", r.name, p.Instance, r.path)
+		}
+	}
+	if n := countRows(t, db, "SELECT COUNT(*) FROM item"); n != 1 {
+		t.Errorf("items = %d, want the other one", n)
+	}
+}

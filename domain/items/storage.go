@@ -136,3 +136,60 @@ func (s *store) reclaimStale(ctx context.Context, staleAge time.Duration) (bool,
 		return true, nil
 	}, nil)
 }
+
+func (s *store) reclaimOrphans(ctx context.Context, staleAge time.Duration, budget int) (int, error) {
+	for n := range budget {
+		reclaimed, err := s.reclaimOrphaned(ctx, staleAge)
+		if err != nil || !reclaimed {
+			return n, err
+		}
+	}
+	return budget, nil
+}
+
+func (s *store) reclaimOrphaned(ctx context.Context, staleAge time.Duration) (bool, error) {
+	return s.db.Transact(ctx, func(tx *sqlate.Tx) (bool, error) {
+		digest, err := s.claimOrphan.One(ctx, tx, query.Args{"stale_age": staleAge})
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
+		if err := s.objects.Delete(ctx, blobKey(digest)); err != nil {
+			return false, err
+		}
+		args := query.Args{"sha256": digest}
+		texts, err := s.sourceTexts.All(ctx, tx, args)
+		if err != nil {
+			return false, err
+		}
+		if _, err := s.deleteOccurs.Exec(ctx, tx, args); err != nil {
+			return false, err
+		}
+		if len(texts) > 0 {
+			if err := s.dropChunks(ctx, tx, texts); err != nil {
+				return false, err
+			}
+		}
+		if _, err := s.dropOrphan.Exec(ctx, tx, args); err != nil {
+			return false, err
+		}
+		return true, nil
+	}, nil)
+}
+
+func (s *store) dropChunks(ctx context.Context, tx *sqlate.Tx, texts []string) error {
+	chunkTexts, err := s.orphanChunks.All(ctx, tx, query.Args{"texts": texts})
+	if err != nil {
+		return err
+	}
+	if _, err := s.deleteChunks.Exec(ctx, tx, query.Args{"texts": texts}); err != nil {
+		return err
+	}
+	if len(chunkTexts) == 0 {
+		return nil
+	}
+	_, err = s.deleteEmbeds.Exec(ctx, tx, query.Args{"texts": chunkTexts})
+	return err
+}

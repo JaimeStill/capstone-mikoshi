@@ -194,3 +194,32 @@ func TestReferenceRoutes_Refusals(t *testing.T) {
 		})
 	}
 }
+
+func TestRoutes_DeleteAnswersNoContent(t *testing.T) {
+	h, f := routes(t, affected(1), affected(1), affected(1))
+	if res := serve(h, http.MethodDelete, "/items/"+itemID); res.Code != http.StatusNoContent || res.Body.Len() != 0 {
+		t.Errorf("status = %d (body %s), want 204 with no body", res.Code, res.Body)
+	}
+	sameOps(t, f.rec, begin, x, x, x, commit)
+}
+
+func TestRoutes_DeleteRefusals(t *testing.T) {
+	cases := []struct {
+		name      string
+		path      string
+		responses []sqltest.Response
+		status    int
+	}{
+		{"a malformed id", "/items/x", nil, http.StatusBadRequest},
+		{"an unknown item", "/items/" + itemID, []sqltest.Response{affected(0), affected(0), affected(0)}, http.StatusNotFound},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			h, _ := routes(t, c.responses...)
+			res := serve(h, http.MethodDelete, c.path)
+			if res.Code != c.status || res.Header().Get("Content-Type") != "application/problem+json" {
+				t.Errorf("status = %d (%s), want a %d problem", res.Code, res.Header().Get("Content-Type"), c.status)
+			}
+		})
+	}
+}

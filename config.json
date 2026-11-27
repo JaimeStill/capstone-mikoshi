@@ -42,6 +42,11 @@
       "interval": "5m",
       "budget": 100,
       "stale_age": "1h"
+    },
+    "orphan_blobs": {
+      "interval": "15m",
+      "budget": 100,
+      "stale_age": "24h"
     }
   },
   "shutdown_timeout": "10s"

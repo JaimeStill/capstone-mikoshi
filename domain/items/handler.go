@@ -25,9 +25,10 @@ type handler struct {
 }
 
 // Routes builds the layer's route group, /items: the record create, the
-// read by id, and the paged read of every item, under limits. The record
-// create is a POST of a JSON body named by its Content-Disposition file
-// name, read under records, whose limit bounds the body and whose rate
+// read by id, the paged read of every item, under limits, and the delete
+// by id, which answers 204 once the item and its references are gone. The
+// record create is a POST of a JSON body named by its Content-Disposition
+// file name, read under records, whose limit bounds the body and whose rate
 // sets the connection's deadlines; it answers 201 with the item and a
 // Location of the request's path, then the item's id. logger records the
 // cause of every 5xx the group's error writer sends. Every refusal is a
@@ -43,6 +44,7 @@ func Routes(service *Service, limits web.Limits, records web.Transfer, logger *s
 	g.HandleErr("POST", "", h.create)
 	g.HandleErr("GET", "", h.list)
 	g.HandleErr("GET", "/{id}", h.find)
+	g.HandleErr("DELETE", "/{id}", h.delete)
 	return g
 }
 
@@ -141,6 +143,18 @@ func (h *handler) find(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	return web.WriteJSON(w, http.StatusOK, item)
+}
+
+func (h *handler) delete(w http.ResponseWriter, r *http.Request) error {
+	id, err := web.PathUUID(r, "id")
+	if err != nil {
+		return err
+	}
+	if err := h.service.Delete(r.Context(), id); err != nil {
+		return err
+	}
+	w.WriteHeader(http.StatusNoContent)
+	return nil
 }
 
 func (h *handler) list(w http.ResponseWriter, r *http.Request) error {

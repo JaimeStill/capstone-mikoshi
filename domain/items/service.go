@@ -204,6 +204,19 @@ func (s *Service) CreateRecord(ctx context.Context, c CreateRecord, content []by
 	return s.store.createOver(ctx, n, body)
 }
 
+// Delete deletes the item with the given id and its references, in one
+// transaction that first moves the update time of the blob it names to
+// now, so content no item names is stale only once its last item's
+// deletion is older than the orphaned blobs' stale age. The blob and its
+// object stay; the [OrphanReclaimer] removes them. An unknown item is
+// sql.ErrNoRows, and a malformed id ErrValidation.
+func (s *Service) Delete(ctx context.Context, id string) error {
+	if _, err := uuid.Parse(id); err != nil {
+		return fmt.Errorf("%w: id must be a UUID", ErrValidation)
+	}
+	return s.store.delete(ctx, id)
+}
+
 // Place places the item with the given id in the explicit context with the
 // given id, by reference. A reference already in place is left as it is,
 // so a repeated call changes nothing. A malformed id is ErrValidation, an
@@ -293,5 +306,39 @@ type PendingReclaimer struct {
 // rows, so a further pass may find more.
 func (r *PendingReclaimer) Pass(ctx context.Context, budget int) (more bool, err error) {
 	n, err := r.store.reclaimPending(ctx, r.staleAge, budget)
+	return err == nil && n >= budget, err
+}
+
+// OrphanReclaimer returns the orphaned blobs' reclaimer over the service's
+// store, which go-database's sweeper runs: it reclaims available content
+// that no item has named since more than staleAge ago.
+func (s *Service) OrphanReclaimer(staleAge time.Duration) *OrphanReclaimer {
+	return &OrphanReclaimer{store: s.store, staleAge: staleAge}
+}
+
+// OrphanReclaimer is the orphaned blobs' reclaimer, a go-database
+// sweep.Reclaimer, which it satisfies structurally: each pass removes the
+// available blobs no item names, once they are stale, with their objects
+// and the content-keyed records only they lead to.
+type OrphanReclaimer struct {
+	store    *store
+	staleAge time.Duration
+}
+
+// Pass reclaims at most budget available blob rows that no item names and
+// that have not moved since more than the stale age ago, by the
+// database's clock, the stalest first, each in a transaction of its own:
+// it locks the row, skipping one a create holds, deletes its object at
+// sha256/<hex>, a missing object included, while it holds the lock, then
+// deletes the content's source occurrences and their sources, the chunks
+// no remaining source names, the embeddings no remaining chunk names, and
+// the row. A create that touches the row meanwhile waits, then finds no
+// row and starts over, writing the object again; one that touched it
+// first has made it fresh, and the pass skips it. A failed object delete
+// leaves the row for a later pass and ends this one with the error. Pass
+// reports more when it reclaimed budget rows, so a further pass may find
+// more.
+func (r *OrphanReclaimer) Pass(ctx context.Context, budget int) (more bool, err error) {
+	n, err := r.store.reclaimOrphans(ctx, r.staleAge, budget)
 	return err == nil && n >= budget, err
 }

@@ -167,9 +167,13 @@
 // holds the gate shared for each pass, and runs the domains' reclaimers,
 // each named for the advisory lock it claims and scheduled by its policy
 // from the configuration's sweep block: expired_uploads, the uploads
-// layer's Reclaimer, which deletes expired uploads and their chunks, and
+// layer's Reclaimer, which deletes expired uploads and their chunks;
 // pending_blobs, the items layer's PendingReclaimer, which removes a blob
-// row left pending past the block's stale age, and its object.
+// row left pending past the block's stale age, and its object; and
+// orphan_blobs, the items layer's OrphanReclaimer, which removes an
+// available blob no item has named past the block's stale age, its
+// object, and the content's source occurrences, sources, chunks, and
+// embeddings that nothing else names.
 //
 // The request edge's readiness is a fresh node, so each Build's starts
 // unbound, ready for the Coordinator that Build's System is handed to. The

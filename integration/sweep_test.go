@@ -268,3 +268,253 @@ func TestSweep_TheServiceSweepsExpiredUploads(t *testing.T) {
 		return countRows(t, db, "SELECT COUNT(*) FROM upload") == 0
 	})
 }
+
+type occurrence struct {
+	part, parent string
+	depth        int
+	texts        map[string]string
+}
+
+func (f sweepFixture) occurrences(t *testing.T, input string, parts ...occurrence) {
+	t.Helper()
+	ctx := t.Context()
+	for _, p := range parts {
+		var parent any
+		if p.parent != "" {
+			parent = p.parent
+		}
+		_, err := f.db.Pool.ExecContext(ctx,
+			"INSERT INTO source_occurrence (input_sha256, part_id, part_sha256, content_type, parent, depth) VALUES ($1, $2, $3, 'text/plain', $4, $5)",
+			input, p.part, hexDigest([]byte(input+p.part)), parent, p.depth)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for kind, text := range p.texts {
+			if _, err := f.db.Pool.ExecContext(ctx,
+				"INSERT INTO source (input_sha256, part_id, kind, text_sha256) VALUES ($1, $2, $3, $4)",
+				input, p.part, kind, hexDigest([]byte(text))); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+}
+
+func (f sweepFixture) chunker(t *testing.T) int {
+	t.Helper()
+	var id int
+	if err := f.db.Pool.QueryRowContext(t.Context(),
+		"INSERT INTO chunker (model, settings) VALUES ('fixture', '{}') RETURNING id").Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+func (f sweepFixture) chunks(t *testing.T, chunker int, source string, texts ...string) {
+	t.Helper()
+	for i, text := range texts {
+		if _, err := f.db.Pool.ExecContext(t.Context(),
+			"INSERT INTO chunk (source_text_sha256, chunker, chunk_index, text, span_start, span_end, text_sha256) VALUES ($1, $2, $3, $4, 0, $5, $6)",
+			hexDigest([]byte(source)), chunker, i, text, len(text), hexDigest([]byte(text))); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.db.Pool.ExecContext(t.Context(),
+			"INSERT INTO embedding (chunk_text_sha256, space, error) VALUES ($1, 1, 'fixture') ON CONFLICT DO NOTHING",
+			hexDigest([]byte(text))); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func (f sweepFixture) named(t *testing.T, content []byte, age time.Duration) {
+	t.Helper()
+	if _, err := f.items.CreateRecord(t.Context(), items.CreateRecord{Name: "named.json"}, content); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.db.Pool.ExecContext(t.Context(),
+		"UPDATE blob SET updated_at = now() - make_interval(secs => $2) WHERE sha256 = $1", hexDigest(content), age.Seconds()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSweep_OrphanedBlobsGoWithTheirObjectsAndRecords(t *testing.T) {
+	f := sweepDomains(t)
+	orphan := []byte("orphaned available blob\n")
+	named := []byte(`{"named": "by an item"}`)
+	fresh := []byte("fresh orphaned available blob\n")
+	pending := []byte("stale pending blob\n")
+	f.blob(t, orphan, "available", 2*staleAge, true)
+	f.named(t, named, 2*staleAge)
+	f.blob(t, fresh, "available", 0, true)
+	f.blob(t, pending, "pending", 2*staleAge, false)
+
+	f.occurrences(t, hexDigest(orphan),
+		occurrence{part: "/", depth: 0, texts: map[string]string{"output": "shared text", "metadata": "orphan metadata"}},
+		occurrence{part: "/1", parent: "/", depth: 1, texts: map[string]string{"vision": "orphan vision"}},
+	)
+	f.occurrences(t, hexDigest(named),
+		occurrence{part: "/", depth: 0, texts: map[string]string{"output": "shared text"}},
+	)
+	f.occurrences(t, hexDigest(fresh),
+		occurrence{part: "/", depth: 0, texts: map[string]string{"output": "fresh text"}},
+	)
+	chunker := f.chunker(t)
+	f.chunks(t, chunker, "shared text", "shared chunk one", "shared chunk two")
+	f.chunks(t, chunker, "orphan metadata", "orphan metadata chunk")
+	f.chunks(t, chunker, "orphan vision", "orphan vision chunk", "shared chunk one")
+	f.chunks(t, chunker, "fresh text", "fresh chunk")
+
+	more, err := f.items.OrphanReclaimer(staleAge).Pass(t.Context(), 10)
+	if err != nil || more {
+		t.Fatalf("Pass = %t, %v; want no more and no error", more, err)
+	}
+
+	for _, c := range []struct {
+		name    string
+		content []byte
+		kept    bool
+		object  bool
+	}{
+		{"orphaned", orphan, false, false},
+		{"named by an item", named, true, true},
+		{"fresh orphaned", fresh, true, true},
+		{"stale pending", pending, true, false},
+	} {
+		want := 0
+		if c.kept {
+			want = 1
+		}
+		if n := f.blobRows(t, c.content); n != want {
+			t.Errorf("%s blob rows = %d, want %d", c.name, n, want)
+		}
+		if got := f.hasObject(t, c.content); got != c.object {
+			t.Errorf("%s object stored = %t, want %t", c.name, got, c.object)
+		}
+	}
+	if n := countRows(t, f.db, "SELECT COUNT(*) FROM source_occurrence WHERE input_sha256 = $1", hexDigest(orphan)); n != 0 {
+		t.Errorf("the orphan's occurrences = %d, want none", n)
+	}
+	if n := countRows(t, f.db, "SELECT COUNT(*) FROM source WHERE input_sha256 = $1", hexDigest(orphan)); n != 0 {
+		t.Errorf("the orphan's sources = %d, want none", n)
+	}
+	for input, want := range map[string]int{hexDigest(named): 1, hexDigest(fresh): 1} {
+		if n := countRows(t, f.db, "SELECT COUNT(*) FROM source WHERE input_sha256 = $1", input); n != want {
+			t.Errorf("sources of %s = %d, want %d", input, n, want)
+		}
+	}
+	for source, want := range map[string]int{"shared text": 2, "orphan metadata": 0, "orphan vision": 0, "fresh text": 1} {
+		if n := countRows(t, f.db, "SELECT COUNT(*) FROM chunk WHERE source_text_sha256 = $1", hexDigest([]byte(source))); n != want {
+			t.Errorf("chunks of %q = %d, want %d", source, n, want)
+		}
+	}
+	for text, want := range map[string]int{
+		"shared chunk one": 1, "shared chunk two": 1, "fresh chunk": 1,
+		"orphan metadata chunk": 0, "orphan vision chunk": 0,
+	} {
+		if n := countRows(t, f.db, "SELECT COUNT(*) FROM embedding WHERE chunk_text_sha256 = $1", hexDigest([]byte(text))); n != want {
+			t.Errorf("embeddings of %q = %d, want %d", text, n, want)
+		}
+	}
+}
+
+func TestSweep_OrphanedBlobsGoInBudgetedPasses(t *testing.T) {
+	f := sweepDomains(t)
+	for i := range 3 {
+		f.blob(t, fmt.Appendf(nil, "orphaned blob %d\n", i), "available", 2*staleAge, true)
+	}
+	r := f.items.OrphanReclaimer(staleAge)
+
+	more, err := r.Pass(t.Context(), 2)
+	if err != nil || !more {
+		t.Fatalf("first Pass = %t, %v; want more after reclaiming the budget", more, err)
+	}
+	if n := countRows(t, f.db, "SELECT COUNT(*) FROM blob"); n != 1 {
+		t.Errorf("blob rows after a pass of budget 2 = %d, want 1", n)
+	}
+	more, err = r.Pass(t.Context(), 2)
+	if err != nil || more {
+		t.Fatalf("second Pass = %t, %v; want no more", more, err)
+	}
+	if n := countRows(t, f.db, "SELECT COUNT(*) FROM blob"); n != 0 {
+		t.Errorf("blob rows after the passes = %d, want none", n)
+	}
+}
+
+func TestSweep_DeletingTheLastItemOrphansItsBlob(t *testing.T) {
+	f := sweepDomains(t)
+	content := []byte(`{"last": "item"}`)
+	item, err := f.items.CreateRecord(t.Context(), items.CreateRecord{Name: "last.json"}, content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := f.items.OrphanReclaimer(staleAge)
+	if err := f.items.Delete(t.Context(), item.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Pass(t.Context(), 10); err != nil {
+		t.Fatal(err)
+	}
+	if n := f.blobRows(t, content); n != 1 || !f.hasObject(t, content) {
+		t.Fatalf("blob rows = %d, object stored = %t right after the delete; want both kept until the stale age passes", n, f.hasObject(t, content))
+	}
+	if _, err := f.db.Pool.ExecContext(t.Context(),
+		"UPDATE blob SET updated_at = now() - make_interval(secs => $2) WHERE sha256 = $1", item.SHA256, (2 * staleAge).Seconds()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Pass(t.Context(), 10); err != nil {
+		t.Fatal(err)
+	}
+	if n := f.blobRows(t, content); n != 0 || f.hasObject(t, content) {
+		t.Errorf("blob rows = %d, object stored = %t past the stale age; want both gone", n, f.hasObject(t, content))
+	}
+}
+
+func TestSweep_CreateRacingAnOrphanedBlobPassNamesAnExistingObject(t *testing.T) {
+	f := sweepDomains(t)
+	r := f.items.OrphanReclaimer(staleAge)
+	const rounds = 12
+
+	for round := range rounds {
+		content := fmt.Appendf(nil, "created over an orphaned blob, round %d\n", round)
+		f.blob(t, content, "available", 2*staleAge, true)
+		f.occurrences(t, hexDigest(content), occurrence{part: "/", depth: 0, texts: map[string]string{"output": string(content)}})
+		file := items.CreateFile{UploadID: uuid.NewV4().String(), Name: "race.txt", MediaType: "text/plain", SHA256: hexDigest(content), Size: int64(len(content))}
+
+		var (
+			wg   sync.WaitGroup
+			item items.Item
+		)
+		start := make(chan struct{})
+		wg.Go(func() {
+			<-start
+			var err error
+			if item, err = f.items.CreateFile(context.Background(), file, bytes.NewReader(content)); err != nil {
+				t.Errorf("round %d: CreateFile = %v", round, err)
+			}
+		})
+		wg.Go(func() {
+			<-start
+			if _, err := r.Pass(context.Background(), 10); err != nil {
+				t.Errorf("round %d: Pass = %v", round, err)
+			}
+		})
+		close(start)
+		wg.Wait()
+
+		if item.SHA256 != hexDigest(content) {
+			t.Fatalf("round %d: item = %+v, want one over the content", round, item)
+		}
+		if got := objectOf(t, f.bucket, item.SHA256); !bytes.Equal(got, content) {
+			t.Errorf("round %d: object = %q, want the content", round, got)
+		}
+		if n := countRows(t, f.db, "SELECT COUNT(*) FROM blob WHERE sha256 = $1 AND status = 'available'", item.SHA256); n != 1 {
+			t.Errorf("round %d: available blob rows = %d, want 1", round, n)
+		}
+	}
+
+	if more, err := r.Pass(t.Context(), 10); err != nil || more {
+		t.Fatalf("Pass after the races = %t, %v", more, err)
+	}
+	if n := countRows(t, f.db, "SELECT COUNT(*) FROM item i JOIN blob b ON b.sha256 = i.sha256 WHERE b.status = 'available'"); n != rounds {
+		t.Errorf("items over available blobs = %d, want %d", n, rounds)
+	}
+}

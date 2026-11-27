@@ -172,7 +172,7 @@ func TestGraph_SweeperIsAReactorAboveTheSchema(t *testing.T) {
 func TestGraph_SweeperRegistersEachDomainsReclaimer(t *testing.T) {
 	a := app.New(configtest.Config(t), io.Discard)
 	sweeper := buildAsRun(t, a).Get(a.Nodes().Sweeper)
-	for _, name := range []string{"expired_uploads", "pending_blobs"} {
+	for _, name := range []string{"expired_uploads", "pending_blobs", "orphan_blobs"} {
 		func() {
 			defer func() {
 				if r := recover(); r != nil {

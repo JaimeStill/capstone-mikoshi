@@ -23,8 +23,8 @@
 //     read.
 //   - [SweepConfig] is the service-owned sweep policy, with its own Merge
 //     and Finalize: a [SweepPolicy], the interval and budget, for each
-//     reclaimer the sweeper runs, the pending blobs' a
-//     [PendingBlobsPolicy] that adds the age past which a pending blob row
+//     reclaimer the sweeper runs, the pending blobs' and the orphaned
+//     blobs' each a [StalePolicy] that adds the age past which a blob row
 //     is stale. [SweepEnv] records the environment-variable names its
 //     Finalize read.
 //   - [Load] reads the layered files, decoding each strictly, and finalizes
