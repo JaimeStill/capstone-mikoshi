@@ -2,12 +2,21 @@ package integration
 
 import (
 	"net"
+	"net/url"
 	"strconv"
 	"testing"
 
 	"github.com/standards-lab/go-core/process/processtest"
 	"github.com/standards-lab/go-web-sdk/webtest"
+	"github.com/standards-lab/sqlate/postgres/pgtest"
 )
+
+// DSNEnv names the environment variable that holds the admin DSN of the
+// PostgreSQL server the suite makes its throwaway databases on; the
+// integration task sets it to the integration stack on POSTGRES_PORT.
+const DSNEnv = "MIKOSHI_INTEGRATION_DSN"
+
+const databasePrefix = "mikoshi"
 
 // Main is the suite's TestMain: it builds cmd/server once, with the race
 // detector so the service runs under it too, runs the tests, and removes
@@ -17,8 +26,12 @@ func Main(m *testing.M) {
 }
 
 // Options shapes one service process. The zero value runs the service on
-// the base configuration file and the harness's own variables alone.
+// the base configuration file and the harness's own variables alone,
+// against a throwaway database of its own.
 type Options struct {
+	// Database is the throwaway database the service connects to, so
+	// several processes can share one; nil makes a new one for the process.
+	Database *pgtest.Database
 	// Env appends further KEY=VALUE overrides, applied last.
 	Env []string
 }
@@ -31,6 +44,14 @@ type Service struct {
 	client *webtest.Client
 }
 
+// Database creates an empty throwaway database on the server [DSNEnv]
+// names, dropped when the test ends, for one or more service processes to
+// share through [Options].
+func Database(t testing.TB) *pgtest.Database {
+	t.Helper()
+	return pgtest.Create(t, DSNEnv, databasePrefix)
+}
+
 // Start runs the service with opts and returns once it is live: Launch
 // then Ready.
 func Start(t testing.TB, opts Options) *Service {
@@ -40,12 +61,18 @@ func Start(t testing.TB, opts Options) *Service {
 
 // Launch runs the service with opts on a reserved loopback port and returns
 // without waiting, so a test can start several processes at once; Ready
-// waits for one.
+// waits for one. The service connects to opts.Database, or to a new
+// throwaway database when it is nil, through the MIKOSHI_DATABASE_*
+// overrides.
 func Launch(t testing.TB, opts Options) *Service {
 	t.Helper()
+	db := opts.Database
+	if db == nil {
+		db = Database(t)
+	}
 	addr := net.JoinHostPort("127.0.0.1", strconv.Itoa(processtest.FreePort(t)))
 	s := &Service{addr: addr, client: webtest.NewClient("http://" + addr)}
-	s.Process = processtest.Launch(t, environment(opts, addr)...)
+	s.Process = processtest.Launch(t, environment(t, opts, addr, db.DSN)...)
 	return s
 }
 
@@ -59,14 +86,25 @@ func (s *Service) Ready(t testing.TB) *Service {
 	return s
 }
 
-func environment(opts Options, addr string) []string {
+func environment(t testing.TB, opts Options, addr, dsn string) []string {
+	t.Helper()
 	host, port, _ := net.SplitHostPort(addr)
+	u, err := url.Parse(dsn)
+	if err != nil {
+		t.Fatalf("parse database DSN: %v", err)
+	}
+	password, _ := u.User.Password()
 	env := []string{
 		"MIKOSHI_ENV=",
 		"MIKOSHI_LOG_LEVEL=debug",
 		"MIKOSHI_LOG_FORMAT=text",
 		"MIKOSHI_SERVER_HOST=" + host,
 		"MIKOSHI_SERVER_PORT=" + port,
+		"MIKOSHI_DATABASE_HOST=" + u.Hostname(),
+		"MIKOSHI_DATABASE_PORT=" + u.Port(),
+		"MIKOSHI_DATABASE_NAME=" + u.Path[1:],
+		"MIKOSHI_DATABASE_USER=" + u.User.Username(),
+		"MIKOSHI_DATABASE_PASSWORD=" + password,
 	}
 	return append(env, opts.Env...)
 }

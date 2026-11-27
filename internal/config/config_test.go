@@ -10,6 +10,7 @@ import (
 	"github.com/standards-lab/go-web-sdk"
 
 	"github.com/JaimeStill/capstone-mikoshi/internal/config"
+	"github.com/JaimeStill/capstone-mikoshi/internal/config/configtest"
 )
 
 func TestConfig_MergeOverlaysSetFields(t *testing.T) {
@@ -35,7 +36,7 @@ func TestConfig_MergeOverlaysSetFields(t *testing.T) {
 }
 
 func TestConfig_FinalizeDefaults(t *testing.T) {
-	cfg := &config.Config{}
+	cfg := configtest.Minimal()
 	if err := cfg.Finalize(""); err != nil {
 		t.Fatalf("Finalize: %v", err)
 	}
@@ -57,7 +58,7 @@ func TestConfig_FinalizeReadsEnvUnderPrefix(t *testing.T) {
 	t.Setenv("MIKOSHI_LOG_LEVEL", "error")
 	t.Setenv("MIKOSHI_SERVER_PORT", "7070")
 
-	cfg := &config.Config{}
+	cfg := configtest.Minimal()
 	if err := cfg.Finalize("svc"); err != nil {
 		t.Fatalf("Finalize: %v", err)
 	}
@@ -75,7 +76,7 @@ func TestConfig_FinalizeEnvOverrides(t *testing.T) {
 	t.Setenv("MIKOSHI_LOG_LEVEL", "debug")
 	t.Setenv("MIKOSHI_SERVER_PORT", "9090")
 
-	cfg := &config.Config{}
+	cfg := configtest.Minimal()
 	if err := cfg.Finalize("mikoshi"); err != nil {
 		t.Fatalf("Finalize: %v", err)
 	}
@@ -96,7 +97,7 @@ func TestConfig_FinalizeRejectsNonPositiveShutdownTimeout(t *testing.T) {
 		t.Run(v, func(t *testing.T) {
 			t.Setenv("MIKOSHI_SHUTDOWN_TIMEOUT", v)
 
-			cfg := &config.Config{}
+			cfg := configtest.Minimal()
 			err := cfg.Finalize("mikoshi")
 			if err == nil {
 				t.Fatalf("Finalize accepted shutdown_timeout %s", v)
@@ -109,7 +110,8 @@ func TestConfig_FinalizeRejectsNonPositiveShutdownTimeout(t *testing.T) {
 }
 
 func TestConfig_FinalizeRejectsNonPositiveFileShutdownTimeout(t *testing.T) {
-	cfg := &config.Config{ShutdownTimeout: libconfig.Duration(-time.Second)}
+	cfg := configtest.Minimal()
+	cfg.ShutdownTimeout = libconfig.Duration(-time.Second)
 	err := cfg.Finalize("")
 	if err == nil || !strings.Contains(err.Error(), "shutdown_timeout must be positive") {
 		t.Errorf("Finalize = %v, want \"shutdown_timeout must be positive\"", err)
@@ -119,7 +121,7 @@ func TestConfig_FinalizeRejectsNonPositiveFileShutdownTimeout(t *testing.T) {
 func TestConfig_FinalizeRejectsUnparsableShutdownTimeout(t *testing.T) {
 	t.Setenv("MIKOSHI_SHUTDOWN_TIMEOUT", "soon")
 
-	cfg := &config.Config{}
+	cfg := configtest.Minimal()
 	err := cfg.Finalize("mikoshi")
 	if err == nil {
 		t.Fatal("Finalize accepted an unparsable MIKOSHI_SHUTDOWN_TIMEOUT")
@@ -133,7 +135,8 @@ func TestConfig_FinalizeEmptyPrefixReadsNoShutdownOverride(t *testing.T) {
 	t.Setenv("MIKOSHI_SHUTDOWN_TIMEOUT", "30s")
 	t.Setenv("SHUTDOWN_TIMEOUT", "30s")
 
-	cfg := &config.Config{ShutdownTimeout: libconfig.Duration(3 * time.Second)}
+	cfg := configtest.Minimal()
+	cfg.ShutdownTimeout = libconfig.Duration(3 * time.Second)
 	if err := cfg.Finalize(""); err != nil {
 		t.Fatalf("Finalize: %v", err)
 	}
@@ -154,7 +157,7 @@ func TestConfig_MergeOverlayShutdownTimeoutReplacesBase(t *testing.T) {
 func TestConfig_FinalizeWrapsChildErrors(t *testing.T) {
 	t.Setenv("MIKOSHI_LOG_LEVEL", "verbose")
 
-	cfg := &config.Config{}
+	cfg := configtest.Minimal()
 	err := cfg.Finalize("mikoshi")
 	if err == nil {
 		t.Fatal("Finalize accepted an invalid log level")
@@ -165,7 +168,7 @@ func TestConfig_FinalizeWrapsChildErrors(t *testing.T) {
 }
 
 func TestReads_FinalizeDefaults(t *testing.T) {
-	cfg := &config.Config{}
+	cfg := configtest.Minimal()
 	if err := cfg.Finalize(""); err != nil {
 		t.Fatalf("Finalize: %v", err)
 	}
@@ -200,7 +203,7 @@ func TestReads_FinalizeEnvOverrides(t *testing.T) {
 	t.Setenv("MIKOSHI_READS_DEFAULT_SIZE", "25")
 	t.Setenv("MIKOSHI_READS_MAX_SIZE", "250")
 
-	cfg := &config.Config{}
+	cfg := configtest.Minimal()
 	if err := cfg.Finalize("mikoshi"); err != nil {
 		t.Fatalf("Finalize: %v", err)
 	}
@@ -229,7 +232,7 @@ func TestReads_FinalizeRejectsInvalidPolicy(t *testing.T) {
 			t.Setenv("MIKOSHI_READS_DEFAULT_SIZE", tc.defaultSize)
 			t.Setenv("MIKOSHI_READS_MAX_SIZE", tc.maxSize)
 
-			cfg := &config.Config{}
+			cfg := configtest.Minimal()
 			err := cfg.Finalize("mikoshi")
 			if err == nil {
 				t.Fatal("Finalize accepted an invalid reads policy")
@@ -238,5 +241,93 @@ func TestReads_FinalizeRejectsInvalidPolicy(t *testing.T) {
 				t.Errorf("error = %v, want the reads block wrap naming %s", err, tc.want)
 			}
 		})
+	}
+}
+
+func TestDatabase_FinalizeDefaults(t *testing.T) {
+	cfg := configtest.Minimal()
+	if err := cfg.Finalize(""); err != nil {
+		t.Fatalf("Finalize: %v", err)
+	}
+
+	if !cfg.Database.Finalized() {
+		t.Error("Database.Finalized() = false after Finalize")
+	}
+	if cfg.Database.Host != "localhost" {
+		t.Errorf("Database.Host = %q, want the localhost default", cfg.Database.Host)
+	}
+	if cfg.Database.Password != "" {
+		t.Errorf("Database.Password = %q, want none without a secrets layer", cfg.Database.Password)
+	}
+}
+
+func TestDatabase_MergeOverlaysSetFields(t *testing.T) {
+	base := configtest.Minimal()
+	base.Database.User = "app"
+	base.Database.Options = map[string]string{"sslmode": "disable"}
+
+	overlay := &config.Config{}
+	overlay.Database.Host = "127.0.0.1"
+	overlay.Database.Port = new(5440)
+	overlay.Database.Password = "secret"
+
+	base.Merge(overlay)
+
+	if base.Database.Host != "127.0.0.1" || base.Database.Port == nil || *base.Database.Port != 5440 {
+		t.Errorf("Database host:port = %s:%v, want 127.0.0.1:5440", base.Database.Host, base.Database.Port)
+	}
+	if base.Database.Password != "secret" {
+		t.Errorf("Database.Password = %q, want the overlay's", base.Database.Password)
+	}
+	if base.Database.Name != "app" || base.Database.User != "app" || base.Database.Options["sslmode"] != "disable" {
+		t.Errorf("Database = %+v, want the base's name, user, and options kept", base.Database)
+	}
+}
+
+func TestDatabase_FinalizeEnvOverrides(t *testing.T) {
+	t.Setenv("MIKOSHI_DATABASE_HOST", "db.internal")
+	t.Setenv("MIKOSHI_DATABASE_PORT", "5441")
+	t.Setenv("MIKOSHI_DATABASE_NAME", "mikoshi_test")
+	t.Setenv("MIKOSHI_DATABASE_USER", "tester")
+	t.Setenv("MIKOSHI_DATABASE_PASSWORD", "from-env")
+
+	cfg := configtest.Minimal()
+	if err := cfg.Finalize("mikoshi"); err != nil {
+		t.Fatalf("Finalize: %v", err)
+	}
+
+	db := cfg.Database
+	if db.Host != "db.internal" || db.Port == nil || *db.Port != 5441 {
+		t.Errorf("Database host:port = %s:%v, want db.internal:5441", db.Host, db.Port)
+	}
+	if db.Name != "mikoshi_test" || db.User != "tester" || db.Password != "from-env" {
+		t.Errorf("Database name, user, password = %q, %q, %q, want the MIKOSHI_DATABASE_* values", db.Name, db.User, db.Password)
+	}
+	if db.Env.Password != "MIKOSHI_DATABASE_PASSWORD" {
+		t.Errorf("Database.Env.Password = %q, want MIKOSHI_DATABASE_PASSWORD", db.Env.Password)
+	}
+}
+
+func TestDatabase_FinalizeRequiresName(t *testing.T) {
+	cfg := &config.Config{}
+	err := cfg.Finalize("")
+	if err == nil {
+		t.Fatal("Finalize accepted a config with no database name")
+	}
+	if !strings.Contains(err.Error(), "database:") {
+		t.Errorf("error = %v, want the database block wrap", err)
+	}
+}
+
+func TestDatabase_FinalizeWrapsInvalidPort(t *testing.T) {
+	t.Setenv("MIKOSHI_DATABASE_PORT", "five")
+
+	cfg := configtest.Minimal()
+	err := cfg.Finalize("mikoshi")
+	if err == nil {
+		t.Fatal("Finalize accepted an unparsable MIKOSHI_DATABASE_PORT")
+	}
+	if !strings.Contains(err.Error(), "database:") || !strings.Contains(err.Error(), "MIKOSHI_DATABASE_PORT") {
+		t.Errorf("error = %v, want the database block wrap naming MIKOSHI_DATABASE_PORT", err)
 	}
 }

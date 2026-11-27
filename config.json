@@ -12,6 +12,13 @@
     "idle_timeout": "2m",
     "transfer_rate": 65536
   },
+  "database": {
+    "name": "app",
+    "user": "app",
+    "options": {
+      "sslmode": "disable"
+    }
+  },
   "reads": {
     "default_size": 20,
     "max_size": 100

@@ -27,13 +27,14 @@ collection read) and the service's logger for its error writer (`web.NewErrorWri
 
 An infrastructure service (a database pool, a storage client, an auth client) is a field on
 `Nodes` plus its node, defined in `defineInfrastructure` (`internal/app/infrastructure.go`) and
-named for the field, with its constructor a method on `*Nodes` —
+named for the field, with its constructor a method on `*Nodes`. The database pool is defined
+this way:
 
 ```go
-n.DB = g.Define("db", n.newDB)
+n.Database = g.Define("database", n.newDatabase)
 
-func (n *Nodes) newDB(s *graph.Scope) (*db.Pool, error) {
-	return db.New(s.Use(n.Config).DB, s.Use(n.Logger)), nil
+func (n *Nodes) newDatabase(s *graph.Scope) (*database.DB, error) {
+	return postgres.New(s.Use(n.Config).Database)
 }
 ```
 
@@ -52,10 +53,12 @@ An admin service administers one infrastructure service over the mechanisms its 
 provides. It is a node defined in `defineAdmin` (`internal/app/admin.go`), with its route group
 mounted under `/admin` in `mountAdmin`. One that verifies and corrects the state of the
 infrastructure it administers is a lifecycle participant by its methods, and the domains that
-depend on that state `Use` it, so it starts ahead of them. The template serves the empty
-`/admin` group on the API listener; before the first admin service is mounted, settle the
-mount's isolation — its own listener, authentication, and audit — because an administrative
-surface on the public port is exposed the moment it serves a route.
+depend on that state `Use` it, so it starts ahead of them. The schema node is the first admin
+service: it migrates at startup, joins `/readyz`, and its route group serves `/admin/database`
+([Admin](admin.md)). The admin mount is a route group separate from `/api`, and its
+schema-changing verbs hold the quiesce gate. Its isolation is unsettled: it serves on the API
+listener without authentication or audit, so it is not for a public deployment until a
+management listener gives it a listener of its own.
 
 A reactor is an entry point that runs for the process lifetime, driven by an occurrence (a
 subscription, an interval, a wake on demand) rather than a caller. Each is a node defined in
@@ -90,6 +93,7 @@ order that go-web-sdk's `middleware` package documents. Middleware scoped to one
 belongs on its route group.
 
 Configuration grows by adding fields to `Config` in `internal/config/config.go` and delegating
-to their `Merge` and `Finalize` in the existing shape; the `reads` block is the model for a
-service-owned block. The service keeps pace with its SDKs by updating its `go-core` and
-`go-web-sdk` pins and applying whatever adjustments the release notes call for.
+to their `Merge` and `Finalize` in the existing shape; the `database` block is the model for a
+library's block, and the `reads` block for a service-owned one. The service keeps pace with its
+SDKs by updating its `go-core`, `go-web-sdk`, `go-database`, and `sqlate` pins and applying
+whatever adjustments the release notes call for.

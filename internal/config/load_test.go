@@ -21,10 +21,11 @@ func inDir(t *testing.T, files map[string]string) {
 	t.Chdir(dir)
 	t.Setenv("MIKOSHI_ENV", "")
 	t.Setenv("MIKOSHI_SHUTDOWN_TIMEOUT", "")
+	t.Setenv("MIKOSHI_DATABASE_PASSWORD", "")
 }
 
 func TestLoad_ShutdownTimeoutIsTopLevelKey(t *testing.T) {
-	inDir(t, map[string]string{"config.json": `{"shutdown_timeout": "3s"}`})
+	inDir(t, map[string]string{"config.json": `{"database": {"name": "app"}, "shutdown_timeout": "3s"}`})
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -36,7 +37,7 @@ func TestLoad_ShutdownTimeoutIsTopLevelKey(t *testing.T) {
 }
 
 func TestLoad_ShutdownTimeoutDefaultsTo10s(t *testing.T) {
-	inDir(t, map[string]string{"config.json": `{}`})
+	inDir(t, map[string]string{"config.json": `{"database": {"name": "app"}}`})
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -48,7 +49,7 @@ func TestLoad_ShutdownTimeoutDefaultsTo10s(t *testing.T) {
 }
 
 func TestLoad_EnvOverridesFileShutdownTimeout(t *testing.T) {
-	inDir(t, map[string]string{"config.json": `{"shutdown_timeout": "3s"}`})
+	inDir(t, map[string]string{"config.json": `{"database": {"name": "app"}, "shutdown_timeout": "3s"}`})
 	t.Setenv("MIKOSHI_SHUTDOWN_TIMEOUT", "4s")
 
 	cfg, err := config.Load()
@@ -71,7 +72,7 @@ func TestLoad_OverlayShutdownTimeout(t *testing.T) {
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			inDir(t, map[string]string{
-				"config.json":      `{"shutdown_timeout": "3s"}`,
+				"config.json":      `{"database": {"name": "app"}, "shutdown_timeout": "3s"}`,
 				"config.test.json": tc.overlay,
 			})
 			t.Setenv("MIKOSHI_ENV", "test")
@@ -100,5 +101,39 @@ func TestLoad_RejectsUnknownTopLevelKeys(t *testing.T) {
 				t.Errorf("error = %v, want %s", err, want)
 			}
 		})
+	}
+}
+
+func TestLoad_PasswordFromSecretsFile(t *testing.T) {
+	inDir(t, map[string]string{
+		"config.json":  `{"database": {"name": "app", "user": "app"}}`,
+		"secrets.json": `{"database": {"password": "from-secrets"}}`,
+	})
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Database.Password != "from-secrets" {
+		t.Errorf("Database.Password = %q, want the secrets file's", cfg.Database.Password)
+	}
+	if cfg.Database.User != "app" {
+		t.Errorf("Database.User = %q, want the config file's app", cfg.Database.User)
+	}
+}
+
+func TestLoad_EnvOverridesSecretsPassword(t *testing.T) {
+	inDir(t, map[string]string{
+		"config.json":  `{"database": {"name": "app"}}`,
+		"secrets.json": `{"database": {"password": "from-secrets"}}`,
+	})
+	t.Setenv("MIKOSHI_DATABASE_PASSWORD", "from-env")
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Database.Password != "from-env" {
+		t.Errorf("Database.Password = %q, want MIKOSHI_DATABASE_PASSWORD's", cfg.Database.Password)
 	}
 }

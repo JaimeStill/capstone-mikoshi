@@ -9,6 +9,9 @@ import (
 
 	"github.com/standards-lab/go-core/graph"
 	"github.com/standards-lab/go-core/lifecycle"
+	"github.com/standards-lab/go-core/reactor"
+	"github.com/standards-lab/go-database"
+	"github.com/standards-lab/go-database/admin"
 	"github.com/standards-lab/go-web-sdk"
 
 	"github.com/JaimeStill/capstone-mikoshi/internal/config"
@@ -35,9 +38,19 @@ type Nodes struct {
 	Config *graph.Node[*config.Config]
 	Writer *graph.Node[io.Writer]
 
-	// Infrastructure (infrastructure.go).
+	// Infrastructure (infrastructure.go): the database is the PostgreSQL
+	// pool, opened through go-database's provider.
 	LifecycleConfig *graph.Node[lifecycle.Config]
 	Logger          *graph.Node[*slog.Logger]
+	Database        *graph.Node[*database.DB]
+
+	// Admin (admin.go): the gate is the process's quiesce gate, which the
+	// schema-changing admin verbs hold exclusively; the schema is
+	// go-database's admin service over the pool, which migrates Mikoshi's
+	// set and reconciles its pgvector declaration at startup and reports
+	// the schema's readiness.
+	Gate   *graph.Node[*reactor.Gate]
+	Schema *graph.Node[*admin.Service]
 
 	// Reactors (reactors.go): the group each reactor joins with graph.In.
 	// A reactor is reached by no Use, so the group is one of [App.Roots],
@@ -85,8 +98,9 @@ func (a *App) Nodes() Nodes { return a.nodes }
 
 // Roots returns the service's root set, the nodes a Build of the whole
 // service starts from: the server, which reaches the router, the
-// readiness, the logger, the writer node, and the config node through its
-// Uses and theirs, and the reactors group, whose members no Use reaches.
+// readiness, the admin mount's schema and gate, the database, the logger,
+// the writer node, and the config node through its Uses and theirs; and
+// the reactors group, whose members no Use reaches.
 // [App.Run] builds this set plus the lifecycle config node the Coordinator
 // is configured from.
 func (a *App) Roots() []graph.Ref {
