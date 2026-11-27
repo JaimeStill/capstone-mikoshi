@@ -5,6 +5,9 @@
 //
 // The package exports:
 //
-//   - [Config], which returns a finalized root configuration whose
-//     composition performs no I/O
+//   - [Minimal], an unfinalized root configuration with only the required
+//     fields set, for tests that run Finalize themselves
+//   - [Config], a finalized root configuration whose composition performs
+//     no I/O
+//   - [ClosedPort], a loopback port a connection attempt is refused on
 package configtest

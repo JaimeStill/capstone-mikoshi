@@ -4,8 +4,8 @@
 // the layer files are the architecture's layer list:
 //
 //   - infrastructure.go: defineInfrastructure, the lifecycle configuration
-//     and the services the application is composed on (the logger, in the
-//     template baseline);
+//     and the services the application is composed on (the logger and the
+//     database pool);
 //   - admin.go: defineAdmin, the administrative services, and their /admin
 //     mount;
 //   - domain.go: defineDomain, the domain services, and their /api mount;
@@ -31,8 +31,8 @@
 // and cannot fail. [App.Graph] and [App.Nodes] publish the graph and its
 // handles, so a caller can Observe or Replace a node before Run. [App.Run]
 // is the hot start plus shutdown: it runs a go-web-sdk web.Service, which
-// builds [App.Roots], the server and the reactors group, plus the lifecycle
-// config node, hands the System to go-core's lifecycle Coordinator, and
+// builds [App.Roots], the server, the database, and the reactors group, plus
+// the lifecycle config node, hands the System to go-core's lifecycle Coordinator, and
 // returns the process exit code. A constructor's error fails the Build,
 // and Run writes "service failed: " and the error, which names the failing
 // node, to the stderr it is given; a wiring mistake panics during Build.
@@ -64,10 +64,15 @@
 //
 // The infrastructure layer holds the lifecycle config the Coordinator is
 // configured from and the services the application is composed on, read
-// from the config node: the logger, written to the writer node, in the
-// template baseline; a database pool, storage, or auth client as a service
-// grows, each its own node, with any order it needs declared on its Define
-// line. A service whose value implements lifecycle.Subsystem takes part in
+// from the config node: the logger, written to the writer node, and the
+// database, the PostgreSQL pool go-database's postgres provider constructs
+// from the configuration's database block; storage or an auth client as the
+// service grows, each its own node, with any order it needs declared on its
+// Define line. The composition root is the only package that imports the
+// provider; every package below it receives the pool as a go-database
+// database.DB. The pool's Start pings the database, so an unreachable
+// database fails startup with an error naming the database node, and its
+// Ready joins the readiness probe under that name. A service whose value implements lifecycle.Subsystem takes part in
 // startup and shutdown through its own methods, and its constructor opens
 // nothing: connectivity belongs to its Start, so a failed Build leaks no
 // connections.

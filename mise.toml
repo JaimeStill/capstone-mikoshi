@@ -13,6 +13,7 @@ jq = "1.8.2"
 [env]
 MIKOSHI_ENV = "local"
 GO_MODULES = "."
+MIKOSHI_INTEGRATION_DSN = "postgres://app:app@127.0.0.1:{{ get_env(name='POSTGRES_PORT', default='5441') }}/app?sslmode=disable"
 
 [tasks.check]
 depends = ["client:build", "client:check"]
@@ -76,7 +77,7 @@ run = "go test -race ./..."
 
 [tasks.integration]
 depends = ["client:build"]
-description = "Start the isolated integration stack (PostgreSQL on tmpfs, on POSTGRES_PORT, default 5441), run the integration tier against the built service as a subprocess, print the stack's logs on a failure, and tear the stack down"
+description = "Start the isolated integration stack (PostgreSQL on tmpfs, on POSTGRES_PORT, default 5441), run the integration tier against the built service as a subprocess, each test on its own throwaway database on the server MIKOSHI_INTEGRATION_DSN names, print the stack's logs on a failure, and tear the stack down"
 run = '''
 set -e
 export COMPOSE_PROJECT_NAME=mikoshi-integration COMPOSE_PROFILES=integration

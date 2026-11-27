@@ -6,22 +6,24 @@ import (
 	libconfig "github.com/standards-lab/go-core/config"
 	"github.com/standards-lab/go-core/lifecycle"
 	"github.com/standards-lab/go-core/logging"
+	"github.com/standards-lab/go-database"
 	"github.com/standards-lab/go-web-sdk"
 )
 
 const envPrefix = "mikoshi"
 
 // Config is the service's root configuration: the library capability blocks
-// plus the service-owned read policy. It embeds the lifecycle Coordinator's
+// (the database among them) plus the service-owned read policy. It embeds the lifecycle Coordinator's
 // configuration by value and untagged, so its shutdown_timeout is a
 // top-level key and ShutdownTimeout a promoted field; Config.Config is that
 // lifecycle block, the one the composition root hands the Coordinator.
 type Config struct {
 	lifecycle.Config
 
-	Log    logging.Config `json:"log"`
-	Server web.Config     `json:"server"`
-	Reads  ReadsConfig    `json:"reads"`
+	Log      logging.Config  `json:"log"`
+	Server   web.Config      `json:"server"`
+	Database database.Config `json:"database"`
+	Reads    ReadsConfig     `json:"reads"`
 }
 
 // Merge overlays src's set fields onto the receiver, delegating each block
@@ -33,6 +35,7 @@ func (c *Config) Merge(src *Config) {
 	c.Config.Merge(&src.Config)
 	c.Log.Merge(&src.Log)
 	c.Server.Merge(&src.Server)
+	c.Database.Merge(&src.Database)
 	c.Reads.Merge(&src.Reads)
 }
 
@@ -53,6 +56,9 @@ func (c *Config) Finalize(envPrefix string) error {
 	}
 	if err := c.Server.Finalize(envPrefix); err != nil {
 		return fmt.Errorf("server: %w", err)
+	}
+	if err := c.Database.Finalize(envPrefix); err != nil {
+		return fmt.Errorf("database: %w", err)
 	}
 	if err := c.Reads.Finalize(envPrefix); err != nil {
 		return fmt.Errorf("reads: %w", err)

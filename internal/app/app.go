@@ -9,6 +9,7 @@ import (
 
 	"github.com/standards-lab/go-core/graph"
 	"github.com/standards-lab/go-core/lifecycle"
+	"github.com/standards-lab/go-database"
 	"github.com/standards-lab/go-web-sdk"
 
 	"github.com/JaimeStill/capstone-mikoshi/internal/config"
@@ -35,9 +36,11 @@ type Nodes struct {
 	Config *graph.Node[*config.Config]
 	Writer *graph.Node[io.Writer]
 
-	// Infrastructure (infrastructure.go).
+	// Infrastructure (infrastructure.go): the database is the PostgreSQL
+	// pool, opened through go-database's provider.
 	LifecycleConfig *graph.Node[lifecycle.Config]
 	Logger          *graph.Node[*slog.Logger]
+	Database        *graph.Node[*database.DB]
 
 	// Reactors (reactors.go): the group each reactor joins with graph.In.
 	// A reactor is reached by no Use, so the group is one of [App.Roots],
@@ -86,12 +89,13 @@ func (a *App) Nodes() Nodes { return a.nodes }
 // Roots returns the service's root set, the nodes a Build of the whole
 // service starts from: the server, which reaches the router, the
 // readiness, the logger, the writer node, and the config node through its
-// Uses and theirs, and the reactors group, whose members no Use reaches.
+// Uses and theirs; the database, which no node above it Uses; and the
+// reactors group, whose members no Use reaches.
 // [App.Run] builds this set plus the lifecycle config node the Coordinator
 // is configured from.
 func (a *App) Roots() []graph.Ref {
 	n := a.nodes
-	return []graph.Ref{n.Server, n.Reactors}
+	return []graph.Ref{n.Server, n.Database, n.Reactors}
 }
 
 // Run runs the service as a web.Service over [App.Roots] until ctx ends,

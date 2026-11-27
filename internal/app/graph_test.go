@@ -14,6 +14,7 @@ import (
 
 	"github.com/standards-lab/go-core/graph"
 	"github.com/standards-lab/go-core/graph/graphtest"
+	"github.com/standards-lab/go-core/lifecycle"
 	"github.com/standards-lab/go-core/reactor"
 	"github.com/standards-lab/go-web-sdk"
 
@@ -24,6 +25,34 @@ import (
 func TestGraph_NodesNamedByTheirFields(t *testing.T) {
 	a := app.New(configtest.Config(t), io.Discard)
 	graphtest.CheckNames(t, a.Nodes())
+}
+
+func TestGraph_ReadinessChecks(t *testing.T) {
+	cfg := configtest.Config(t)
+	a := app.New(cfg, io.Discard)
+	sys := buildAsRun(t, a)
+
+	var got []string
+	for _, c := range lifecycle.New(sys, cfg.Config).Checks() {
+		got = append(got, c.Name)
+	}
+	if want := []string{"database"}; !slices.Equal(got, want) {
+		t.Errorf("checks = %v, want %v\nlayers:\n%s", got, want, sys)
+	}
+}
+
+func TestGraph_DatabaseBelowServer(t *testing.T) {
+	a := app.New(configtest.Config(t), io.Discard)
+	sys := buildAsRun(t, a)
+	n := a.Nodes()
+
+	if !sys.Has(n.Database) {
+		t.Fatalf("%s is not in the System\nlayers:\n%s", n.Database.Name(), sys)
+	}
+	if d, s := sys.LayerOf(n.Database), sys.LayerOf(n.Server); d >= s {
+		t.Errorf("%s in layer %d, %s in layer %d; want the database below\nlayers:\n%s",
+			n.Database.Name(), d, n.Server.Name(), s, sys)
+	}
 }
 
 func runSet(a *app.App, extra ...graph.Ref) []graph.Ref {
