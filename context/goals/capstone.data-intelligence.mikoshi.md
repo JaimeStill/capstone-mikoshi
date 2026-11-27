@@ -10,7 +10,7 @@
 2. [x] store
 3. [x] contexts
 4. [x] upload
-5. [ ] browser-upload
+5. [x] browser-upload
 6. [ ] items
 7. [ ] sse-codec
 8. [ ] event-extensions
@@ -46,11 +46,23 @@
 - store: below roughly 750–1,000 rows in space 1, the planner reads `pk_embedding` and sorts instead of scanning space 1's HNSW index, even with `enable_seqscan` off; an index proof for `hybrid-search` needs more rows (the store proof uses 2,000).
 - store: `ingest` maps docproc's empty parent and where to NULL (the columns refuse `''`), and writes a source's stage name, version, and configuration hash all or none.
 - store: the schema check caches its readiness for a few seconds, so `/readyz` trails an out-of-band schema change by that long.
-- items: plan blob reclamation, and reclamation of orphaned content-keyed sources (their chunks and embeddings), on go-database's sweeper as go-web-service's `FilesReclaimer` does (agreed at contexts' brief).
+- items: plan blob reclamation, and reclamation of orphaned content-keyed sources (their chunks and embeddings), on go-database's sweeper as go-web-service's `FilesReclaimer` does (agreed at contexts' brief), and reclamation of expired uploads, which a repeated creation can leave empty (browser-upload's brief).
 - context-tools: consider a context-bound sub-agent for one-off wider analyses: a tool starts a sub-agent bound to a given context (the root included), whose cited answer is recorded with that boundary in its provenance; settle its approval, budgets, and process model there. Input for `spike-go-harness`.
 - upload: Bunrei's (`state`/`api`) and Mikoshi's (`items`) cross-replica stores are their own, proven with `uploadtest`, and arbitrate appends by a conditional commit on the expected offset. Rejected: a lock or lease per upload (a hung request blocks resumption until it times out, draft §10); a shared store now (Bunrei keeps upload state on JetStream, Mikoshi in PostgreSQL, with different retention, and no existing repository may hold one under the dependency rules), which `upload-store-graduation` revisits.
 - upload: Bunrei's and `items`' Complete functions are idempotent on the upload ID, because overlapping completing requests can each call one. Rejected: a store claim operation (it changes the approved `Store` interface).
-- upload: `browser-upload` tests web-app-sdk's client against the handler as the second implementation, and its draft pin mirrors `upload.DraftRevision` (16) and `upload.InteropVersion` (11). Rejected: tusd as an interop peer (v2.10.4 speaks interop versions 3–6 only).
+- browser-upload: web-app-sdk's own `./upload.js` is the draft-16 browser client, and
+  `Client.upload` stays the one-request upload. Rejected: tus-js-client (it stops at draft-05 and
+  sends no digests), and a method on `Client`.
+- browser-upload: the app keeps an upload's Location and resumes it after a reload with
+  `open(location, file)`; the handler's Repr-Digest check catches a different file.
+- browser-upload: web-app-sdk pins Go and a test-only Go module requiring go-web-sdk's upload
+  release, whose handler is the client's interop peer. A draft revision moves go-web-sdk's
+  `DraftRevision`, web-app-sdk's `DRAFT_REVISION`, and the module's requirement together.
+  Rejected: a test server command in go-web-sdk, and tusd as the peer (v2.10.4 speaks interop
+  versions 3–6 only).
+- browser-upload: `create` also repeats a creation answered 429 or 5xx, as go-web-sdk's `Client.Create` does (no behavior asked it; flagged at the session brief).
+- items: Mikoshi serves the client from the handler's origin, so the handler needs no CORS;
+  web-app-sdk's README names the headers a cross-origin server must expose.
 
 ## Pending edits
 
@@ -65,3 +77,13 @@
 - architecture · standards/go-elemental/principles/construction-and-execution.md: state the exception for an interface that must stay standard-library-only (go-web-sdk's `upload.Store.Create` takes six positional inputs after ctx, since a struct would make implementers import go-web-sdk).
 - architecture · principles/rolling-currency.md: add a specification revision a library implements (pinned in its source, read from its registry such as datatracker) to the versions the principle covers.
 - docproc · context/bunrei.md: repoint `chunked-upload-graduation` at go-web-sdk's draft-16 handler and `upload-store-graduation`; replace the stale upload commands (OpenUpload, AppendChunk, AbortUpload, GetUpload) with CompleteUpload and the draft-16 handler.
+- capstone-data-intelligence · `context/upload.md`, Ownership: replace the `ReadUpload` and
+  `Transfer` at v0.18.0 line. The handler reads bodies of unknown length itself and builds on
+  v0.19.0's `Transfer`.
+- capstone-data-intelligence · `context/upload.md`, Ownership: add that web-app-sdk's client lives
+  in `./upload.js` (from v0.2.0), and that its draft pin is `DRAFT_REVISION`, which web-app-sdk's
+  currency compares with datatracker's latest revision, as go-web-sdk's does `DraftRevision`.
+- architecture · `principles/rolling-currency.md`: when adding the specification-revision pin
+  already pending, name both go-web-sdk's `DraftRevision` and web-app-sdk's `DRAFT_REVISION`.
+- coordinator · `context/web-client.md`: record that web-app-sdk now pins Go for its browser tier,
+  the stack's first JavaScript library to do so, for a Go peer used only in tests.
