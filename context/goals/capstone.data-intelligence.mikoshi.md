@@ -86,7 +86,8 @@ Two-way. Nothing is released. The schema lives only in disposable databases unti
 
 ## Progress
 
-slices 6/6 committed · standards — · spec — · editor —
+slices 6/6 committed · standards ✓ · spec ✓ · editor ✓
+- spec gap: capability map unchanged → editor
 
 ## Decisions
 
@@ -99,16 +100,18 @@ slices 6/6 committed · standards — · spec — · editor —
 - context-tools: SSE holds under replicas (request-scoped, no sticky sessions); settle ingress buffering and idle timeout, HTTP/2, and the drain policy for in-flight answers there.
 - evidence 15 (the browser's event transport, NATS over WebSocket or a relay) is decided in its own task; a relay would be an SSE-backed `EventSequence`, stateless per replica over JetStream.
 - client routes (contexts, items): address by id, or keep the last segment free of dots; go-web-sdk's `NewClient` answers a last segment with an extension as an asset (a 404 problem), never the shell.
-- store: each embedding space is registered by its own migration (its row at a fixed ID plus a partial HNSW index over `embedding::vector(n)`); set A's space is ID 1. Adding a space means a Mikoshi release. Rejected: runtime registration issuing DDL outside the migration history.
-- store: set A's space uses cosine (`vector_cosine_ops`, `<=>`) with query prefix `query: `.
-- store: chunkers live in their own table with a surrogate ID, and a chunk is keyed by source text SHA-256, chunker ID, and index; `ingest` registers chunkers at runtime by insert.
-- store: a source occurrence's sources are a child table indexed on the text SHA-256, which `contexts` and `lineage` join through. Rejected: a JSON array column.
+- store: each embedding space is registered by its own migration, so adding a space means a Mikoshi release. Rejected: runtime registration issuing DDL outside the migration history.
+- store: `ingest` registers chunkers at runtime by inserting into the `chunker` table, whose surrogate ID keys each chunk.
 - store: the GIN index on the chunk's `simple` tsvector ships with the chunk table; `hybrid-search` adds no lexical index.
 - store: ships no statements; `hybrid-search` owns the nearest-neighbour statement. sqlint, with pgvector under `extensions`, arrives with the first statement file.
-- store: `/admin/database` is served on the API listener until a management listener lands, and is documented as not for public deployment. The schema verbs hold the process's quiesce gate, there are no seed states, and the reset event is left to the messaging task.
-- store: integration tests run against compose PostgreSQL 19 with pgvector 0.8.7 built from source, on 5440 (development) and 5441 (integration), each test on its own `pgtest` database.
+- store: a database reset emits no event; the messaging task adds the reset event.
 - store: currency is sqlate's shared script, verbatim.
+- store: below roughly 750–1,000 rows in space 1, the planner reads `pk_embedding` and sorts instead of scanning space 1's HNSW index, even with `enable_seqscan` off; an index proof for `hybrid-search` needs more rows (the store proof uses 2,000).
+- store: `ingest` maps docproc's empty parent and where to NULL (the columns refuse `''`), and writes a source's stage name, version, and configuration hash all or none.
+- store: the schema check caches its readiness for a few seconds, so `/readyz` trails an out-of-band schema change by that long.
 
 ## Pending edits
 
 - coordinator · context/web-client.md (the backlog entry's summary is at its budget): add webappgen findings from web-shell's inject: when the base is `/`, `mountClient` emits both the `/` not-found branch and the `Mount` branch and a dead `strings` import; inject doesn't add `client.go` to the composition root's `doc.go` layer list; the `# Written by webappgen` header its integration test requires conflicts with comments.md; the browser tier's `ENTRY` and `RENDER_BLOCKING` constants aren't tied to the Go package's `Entry` and `RenderBlocking`; the service's check builds the client twice, and ci.yml's check job builds it again; the root `currency` doesn't run the client's (`mise -C web run currency`), so the client's pins fall behind unreported.
+- coordinator · context/web-client.md: add a go-web-sdk-template finding: the template ships the older 84-line `scripts/currency.sh`, without the Dockerfile scans or HOLDS; sqlate's and go-database's shared script is current.
+- coordinator · retro topic: settle how a document references another repository's document. lint-references can't resolve `context/chunks.md` in capstone-data-intelligence, so Mikoshi's migration headers link it by GitHub URL.

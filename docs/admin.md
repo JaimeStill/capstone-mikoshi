@@ -1,8 +1,8 @@
 # Admin
 
-The database admin service is mounted under `/admin/database`. Each endpoint runs the same
-go-database admin operation that startup runs; the schema verbs answer with the resulting schema
-status.
+The database admin service is mounted under `/admin/database`. Each endpoint calls the go-database
+admin service that startup runs its verify and up through; the schema verbs answer with the
+resulting schema status.
 
 | Method | Path | What it does |
 |--------|------|--------------|

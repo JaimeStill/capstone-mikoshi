@@ -5,8 +5,8 @@ Mikoshi runs on one declared stack, with one provider per capability.
 - SQL: PostgreSQL 19 with the pgvector extension, through
   [go-database](https://github.com/standards-lab/go-database) for the pool and its administration
   and [sqlate](https://github.com/standards-lab/sqlate) for the dialect and the migrator. Locally
-  it runs from the compose file, an image built from
-  [`compose/postgres/Dockerfile`](../compose/postgres/Dockerfile) with pgvector 0.8.7 compiled
+  it runs in the image the compose file builds from
+  [`compose/postgres/Dockerfile`](../compose/postgres/Dockerfile), with pgvector 0.8.7 compiled
   from source.
 
 ## Standard and native tiers
@@ -49,5 +49,4 @@ migrations below, and leaves the configuration's shape and the other packages as
 - `0007_chunk`: the `~` `CHECK`s, and the stored generated `to_tsvector('simple', text)` column
   with its GIN index. Another engine uses its own full-text index.
 
-Mikoshi has no statement files yet; each one the domains add joins this list when it uses a
-native form.
+Mikoshi has no statement files. A statement file that uses a native form joins this list.
