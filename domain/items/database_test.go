@@ -841,12 +841,11 @@ func TestStore_RegistersAndVerifiesEveryStatement(t *testing.T) {
 			t.Errorf("statement %s was not verified", st.Name())
 		}
 	}
-	var fields []string
-	for _, field := range entry.Statement("list").Fields() {
-		fields = append(fields, field.Name)
-	}
-	if want := []string{"id", "route", "kind", "duration"}; !slices.Equal(fields, want) {
-		t.Errorf("list fields = %v, want %v", fields, want)
+	for _, name := range []string{"list", "covered"} {
+		base := entry.Statement(name).Text()
+		if !slices.ContainsFunc(prepared, func(sql string) bool { return sql != base && strings.Contains(sql, base) }) {
+			t.Errorf("Verify prepared no probe over the %s projection; want its field contract probed", name)
+		}
 	}
 }
 
