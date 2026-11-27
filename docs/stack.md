@@ -33,12 +33,13 @@ test's database through sqlate's `postgres/pgtest`, and the suite names pgvector
 `postgres/pgvector` and runs pgvector queries to prove the index. The package boundary is a
 convention held in review.
 
-The statement files are held to their tier by sqlint, which `mise run check` runs under
-[`sqlint.toml`](../sqlint.toml): a statement file in `domain/*/statements` or `data/statements`
-headed `tier: standard` uses no native form that PostgreSQL or pgvector declares. One statement
-file is native tier: [`data/statements/lock.sql`](../data/statements/lock.sql), the advisory lock
-`pg_advisory_xact_lock` over `hashtext`, which the context tree takes. sqlint does not check the
-migrations' forms, so the list below is held in review.
+sqlint holds each statement file to its tier. `mise run check` runs it under
+[`sqlint.toml`](../sqlint.toml), which fails a statement file in `domain/*/statements` or
+`data/statements` that is headed `tier: standard` and uses a native form PostgreSQL or pgvector
+declares. One statement file is native tier:
+[`data/statements/lock.sql`](../data/statements/lock.sql), the context tree's advisory lock,
+`pg_advisory_xact_lock` over `hashtext`. sqlint does not check the migrations' forms, so review
+holds the migrations list below.
 
 ## What a provider swap changes
 
@@ -62,5 +63,6 @@ migrations below, and leaves the configuration's shape and the other packages as
 
 A port also changes the native statement files:
 
-- `data/statements/lock.sql`: the advisory lock. Its header names the ports: `sp_getapplock`
-  (SQL Server), `GET_LOCK` (MySQL), `DBMS_LOCK` (Oracle), or a `FOR UPDATE` mutex row.
+- `data/statements/lock.sql`: the advisory lock. Its header names the replacements:
+  `sp_getapplock` (SQL Server), `GET_LOCK` (MySQL), `DBMS_LOCK` (Oracle), or a `FOR UPDATE`
+  mutex row.

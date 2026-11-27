@@ -130,7 +130,14 @@ stays ready to graduate.
 
 ## Progress
 
-slices 0/6 committed · standards — · spec — · editor —
+slices 6/6 committed · standards done · spec done · editor done
+- slice 1: rolldown 1.2.19 → 1.3.4 also taken; currency trailed it once vite reached 8.4.0.
+- slice 2: a create under a query context answers 409 (the parent's state), as go-web-service's transfer cycle does; problem mapping sits in the contexts handler; the root is named `root`; Mikoshi's `data.Database` has no statement registry, so startup verify doesn't cover contexts statements.
+- slice 3: rename is `PUT /api/contexts/{id}` (go-web-service's edit shape) and takes no tree lock (one UPDATE; the sibling constraint guards it); renaming the root is 409 `ErrRootFixed`; children are always by name, refusing sort and filter.
+- slice 4: move is `POST /api/contexts/{id}/move` with a new `ErrCycle` (409); subtree resolution has no HTTP route; the concurrency and cycle-walk tests build the domain service against the integration database.
+- slice 5: delete answers 204; an absent confirm counts as 0, so a leaf deletes at once and any other mismatch is 409 with `descendants` (go-web-sdk `Problem.Extras`); the subtree delete is one walk-based DELETE, 0008's FK unchanged.
+- standards: UTC checks made falsifiable (service under TZ=Asia/Kolkata); rename passes the canonical id; the session kept the concurrency tests on the domain service (the brief's seam) and closed the startup-verify gap: every statement prepares against the migrated schema in the schema node's Start, without a go-database Seeder, so `POST /admin/database/schema/verify` doesn't check statements.
+- spec: all 14 behaviors met; startup verify kept as beyond the brief; eslint 10.15.0 → 10.16.0 taken (released after slice 1).
 
 
 ## Decisions
@@ -138,7 +145,6 @@ slices 0/6 committed · standards — · spec — · editor —
 - capstone: contracts (`chunks`, `protocol`, `events`) are designed in `.foundation` at capstone-data-intelligence; Bunrei and Mikoshi build against them, and a task that reads one opens its summary with "Waits on".
 - capstone: Bunrei's `client` module is released by tag (`client/v0.1.0` at `api`); Mikoshi imports the published version, never a replace directive.
 - capstone: only `.bunrei` touches the exclusive group (docproc, docinfer, go-messaging); `.mikoshi` stays out of it, so its SSE relay and context tree live in Mikoshi, shaped to graduate.
-- capstone: items join contexts by reference and a context covers its descendants; chunks and embeddings stay keyed by content and carry no context.
 - signal boundary: a model's token stream travels as direct SSE inside the one request that asked for it; only committed outcomes become go-messaging events (one per committed turn or analysis, with lineage); live views read events, never streams. Rejected: token deltas on go-messaging (a JetStream ack per publish, an outbox row and transaction, retention, lost cancellation).
 - SSE layering: the codec in go-core, the HTTP writer in go-web-sdk, go-ai on go-core's codec, built as `.bunrei` tasks (it holds the exclusive group); context-tools waits on them and is the writer's first consumer. Rejected: a Mikoshi-local relay package, tmaxmax/go-sse, r3labs/sse.
 - context-tools: SSE holds under replicas (request-scoped, no sticky sessions); settle ingress buffering and idle timeout, HTTP/2, and the drain policy for in-flight answers there.
@@ -147,23 +153,17 @@ slices 0/6 committed · standards — · spec — · editor —
 - store: each embedding space is registered by its own migration, so adding a space means a Mikoshi release. Rejected: runtime registration issuing DDL outside the migration history.
 - store: `ingest` registers chunkers at runtime by inserting into the `chunker` table, whose surrogate ID keys each chunk.
 - store: the GIN index on the chunk's `simple` tsvector ships with the chunk table; `hybrid-search` adds no lexical index.
-- store: ships no statements; `hybrid-search` owns the nearest-neighbour statement. sqlint, with pgvector under `extensions`, arrives with the first statement file.
+- store: `hybrid-search` owns the nearest-neighbour statement.
 - store: a database reset emits no event; the messaging task adds the reset event.
 - store: currency is sqlate's shared script, verbatim.
 - store: below roughly 750–1,000 rows in space 1, the planner reads `pk_embedding` and sorts instead of scanning space 1's HNSW index, even with `enable_seqscan` off; an index proof for `hybrid-search` needs more rows (the store proof uses 2,000).
 - store: `ingest` maps docproc's empty parent and where to NULL (the columns refuse `''`), and writes a source's stage name, version, and configuration hash all or none.
 - store: the schema check caches its readiness for a few seconds, so `/readyz` trails an out-of-band schema change by that long.
-- contexts: the tree is an adjacency list walked by standard-tier `WITH RECURSIVE`. Rejected: `ltree` (a second native extension; a move rewrites descendant paths), a closure table (a move rewrites subtree × depth rows), blobfs as a dependency (a file sits in one directory; no references or saved filters).
-- contexts: a query context is a leaf, and its filter matches every item, so `standing-analyses`' "item added" check needs no tree walk.
-- contexts: a filter is a jsonb list of sqlate `query.Filter` `{field, op, value}` entries, ANDed, with no OR; `contexts` checks shape and operators, `items` checks fields against its item projection and evaluates filters.
-- contexts: retrieval resolves a context to an item-id set (the subtree's explicit members plus each query context's matches); `hybrid-search` and `context-tools` take that set and join item → input SHA-256 → source occurrence → source → chunk.
-- contexts: `items` owns membership, whose rows are deleted with their context; a subtree delete is one statement under the tree lock.
-- contexts: every change to the tree's shape takes the tree lock, `pg_advisory_xact_lock`; graduation keeps blobfs's standard-tier fallback (serializable isolation with retry).
-- contexts: deleting a context with descendants needs a matching `confirm=<count>` after a 409 conflict carrying `descendants`.
-- contexts: context ids are UUIDv7; the root is the nil UUID and can't be renamed, moved, or deleted.
 
 ## Pending edits
 
 - coordinator · context/web-client.md (the backlog entry's summary is at its budget): add webappgen findings from web-shell's inject: when the base is `/`, `mountClient` emits both the `/` not-found branch and the `Mount` branch and a dead `strings` import; inject doesn't add `client.go` to the composition root's `doc.go` layer list; the `# Written by webappgen` header its integration test requires conflicts with comments.md; the browser tier's `ENTRY` and `RENDER_BLOCKING` constants aren't tied to the Go package's `Entry` and `RenderBlocking`; the service's check builds the client twice, and ci.yml's check job builds it again; the root `currency` doesn't run the client's (`mise -C web run currency`), so the client's pins fall behind unreported.
 - coordinator · context/web-client.md: add a go-web-sdk-template finding: the template ships the older 84-line `scripts/currency.sh`, without the Dockerfile scans or HOLDS; sqlate's and go-database's shared script is current.
 - coordinator · retro topic: settle how a document references another repository's document. lint-references can't resolve `context/chunks.md` in capstone-data-intelligence, so Mikoshi's migration headers link it by GitHub URL.
+- coordinator · roadmap/context-tree-graduation.toml: add `context = ["capstone-mikoshi/docs/contexts.md"]`, the tree's design, including the native tree lock that the library replaces with blobfs's standard-tier fallback.
+- coordinator · retro topic: go-database's admin service checks statements in `Verify` only through a `Seeder`, so a service with statements and no seed states can't have `POST /admin/database/schema/verify` check them. Mikoshi checks its statements at startup instead (`data.Database.Verify`, docs/admin.md).

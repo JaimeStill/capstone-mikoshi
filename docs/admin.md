@@ -1,9 +1,13 @@
 # Admin
 
-The database admin service is mounted under `/admin/database`. Each endpoint calls the go-database
-admin service that startup runs its verify and up through; once the schema is current, startup
-also prepares every registered statement against it, and a statement that does not fit fails
-startup naming it. The schema verbs answer with the resulting schema status.
+The database admin service is mounted under `/admin/database`. Each endpoint calls go-database's
+admin service, the one startup runs its verify and up through, and the schema verbs answer with
+the resulting schema status.
+
+Once the schema is current, startup also prepares every registered statement against it, and a
+statement that does not fit fails startup with an error naming it. The `verify` endpoint does not
+check statements: go-database's admin service checks them only through a seeder, and Mikoshi
+configures none.
 
 | Method | Path | What it does |
 |--------|------|--------------|

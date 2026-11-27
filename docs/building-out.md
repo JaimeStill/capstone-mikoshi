@@ -22,8 +22,10 @@ A domain service starts from its Entity:
 4. Define the service's node in `defineDomain` and mount the group in `mountAPI` (`domain.go`).
 
 The constructor draws what it uses from the infrastructure nodes it `Use`s: a domain that keeps
-records takes the `SQL` node's `data.Database`, the session and the catalog its statements
-compile against, as `contexts.New(s.Use(n.SQL))` does ([Contexts](contexts.md)). The handler is
+records takes the `sql` node's `data.Database`, the session and the catalog its statements
+compile against, as `contexts.New(s.Use(n.SQL))` does ([Contexts](contexts.md)). Its store
+registers its compiled statements with `Database.Register`, and the schema node's constructor
+`Use`s the domain's node, so the schema node verifies those statements at startup. The handler is
 handed its policy from the config node at the construction site (`cfg.Reads.Limits()` for a
 collection read) and the service's logger for its error writer (`web.NewErrorWriter(logger, ...)`).
 
@@ -57,7 +59,8 @@ mounted under `/admin` in `mountAdmin`. One that verifies and corrects the state
 infrastructure it administers is a lifecycle participant by its methods, and the domains that
 depend on that state `Use` it, so it starts ahead of them. The schema node is the first admin
 service: it migrates at startup, then prepares every statement the domains registered on the
-`sql` node, joins `/readyz`, and its route group serves `/admin/database` ([Admin](admin.md)).
+`sql` node against the migrated schema. It joins `/readyz`, and its route group serves
+`/admin/database` ([Admin](admin.md)).
 The admin mount is a route group separate from `/api`, and its schema-changing verbs hold the
 quiesce gate. Its isolation is unsettled: it serves on the API listener without authentication or
 audit, so it is not for a public deployment until a management listener gives it a listener of
