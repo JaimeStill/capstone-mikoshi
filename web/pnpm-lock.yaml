@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       '@standards-lab/web-app-sdk':
-        specifier: github:standards-lab/web-app-sdk#v0.1.0
-        version: https://codeload.github.com/standards-lab/web-app-sdk/tar.gz/4d5371259a7cc69e039a19e043431f2d1665727c
+        specifier: github:standards-lab/web-app-sdk#v0.2.0
+        version: https://codeload.github.com/standards-lab/web-app-sdk/tar.gz/d06b5d45db70409e1ba8c857f25ea4240b935a22
       '@standards-lab/web-components':
         specifier: github:standards-lab/web-components#v0.2.0
         version: https://codeload.github.com/standards-lab/web-components/tar.gz/5ab6eb335389f38ac2b8465d6bf17a5a78f38646(@standards-lab/web-foundation@https://codeload.github.com/standards-lab/web-foundation/tar.gz/67b3b6cd1a60dc4ce420039a2b584961f68d201f)(@standards-lab/web-icons@https://codeload.github.com/standards-lab/web-icons/tar.gz/499927708dcf386e0cff3de7ba84a10eaf19fa1a(@types/node@26.6.11))
@@ -400,9 +400,9 @@ packages:
   '@rolldown/pluginutils@1.1.1':
     resolution: {integrity: sha512-glFIJDvLNDtJhT9qrMFWLPbvS+skxgt4L0K8Ei2YtnhPysAJnsI7nyxSJxKj4ADeKX0OLjC4ntRkwpLOoS3rwA==}
 
-  '@standards-lab/web-app-sdk@https://codeload.github.com/standards-lab/web-app-sdk/tar.gz/4d5371259a7cc69e039a19e043431f2d1665727c':
-    resolution: {gitHosted: true, integrity: sha512-38ZBrxVepmu8/Ste2ptstsd/mtKMKHmXsBi5th9253DjwIhsXcr+Evr6vzILMPtM2OgiuNhCViyTDvv+AhDfvA==, tarball: https://codeload.github.com/standards-lab/web-app-sdk/tar.gz/4d5371259a7cc69e039a19e043431f2d1665727c}
-    version: 0.1.0
+  '@standards-lab/web-app-sdk@https://codeload.github.com/standards-lab/web-app-sdk/tar.gz/d06b5d45db70409e1ba8c857f25ea4240b935a22':
+    resolution: {gitHosted: true, integrity: sha512-wfjZPhKGH59nA5kppkD4RV7/hdbGC2/9piRqGWj+un9/J1tX0MDUR970i5XjX99g1O1J8zsUJnj+7MaacV25rA==, tarball: https://codeload.github.com/standards-lab/web-app-sdk/tar.gz/d06b5d45db70409e1ba8c857f25ea4240b935a22}
+    version: 0.2.0
     peerDependencies:
       '@nats-io/jetstream': ^3.5.0
       '@nats-io/nats-core': ^3.5.0
@@ -1564,7 +1564,7 @@ snapshots:
 
   '@rolldown/pluginutils@1.1.1': {}
 
-  '@standards-lab/web-app-sdk@https://codeload.github.com/standards-lab/web-app-sdk/tar.gz/4d5371259a7cc69e039a19e043431f2d1665727c': {}
+  '@standards-lab/web-app-sdk@https://codeload.github.com/standards-lab/web-app-sdk/tar.gz/d06b5d45db70409e1ba8c857f25ea4240b935a22': {}
 
   '@standards-lab/web-components@https://codeload.github.com/standards-lab/web-components/tar.gz/5ab6eb335389f38ac2b8465d6bf17a5a78f38646(@standards-lab/web-foundation@https://codeload.github.com/standards-lab/web-foundation/tar.gz/67b3b6cd1a60dc4ce420039a2b584961f68d201f)(@standards-lab/web-icons@https://codeload.github.com/standards-lab/web-icons/tar.gz/499927708dcf386e0cff3de7ba84a10eaf19fa1a(@types/node@26.6.11))':
     dependencies:

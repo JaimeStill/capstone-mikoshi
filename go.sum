@@ -19,8 +19,8 @@ github.com/standards-lab/go-database v0.13.0 h1:xBiN+gZE2Q0x+S/N0DgaDNqT9feHxcu4
 github.com/standards-lab/go-database v0.13.0/go.mod h1:M4jca1wtAP4MUDAdLa+lgvBGAzyfc8A1EdpVaQssXfc=
 github.com/standards-lab/go-database/postgres v0.7.0 h1:M4mGIgcMT3mil+DqEAMjm5sN64OZsO1U6LUKCc8lOmg=
 github.com/standards-lab/go-database/postgres v0.7.0/go.mod h1:QOYOCHvQXhXZnaKis7lOX5363bNvPRD5Ef82JPaXCJY=
-github.com/standards-lab/go-web-sdk v0.18.0 h1:cmAsvUWiH2OjwdOL9Rx52ccHhoZIAXWPehQusAPC3RE=
-github.com/standards-lab/go-web-sdk v0.18.0/go.mod h1:mOY19BBYOsEhqAsp7AuOkEG6Kle7pp0HZ8n6CCQd5a8=
+github.com/standards-lab/go-web-sdk v0.19.0 h1:s7TNSSeNg6Bnb5oomg5PH7xhQkejApBVTeuRW8syMu8=
+github.com/standards-lab/go-web-sdk v0.19.0/go.mod h1:mOY19BBYOsEhqAsp7AuOkEG6Kle7pp0HZ8n6CCQd5a8=
 github.com/standards-lab/sqlate v0.8.0 h1:G1uUIWmc2DxJz5YhtBvIlftfURnb3b2RKsYB59Wa03Y=
 github.com/standards-lab/sqlate v0.8.0/go.mod h1:pikNmGf/z3x46SBWFXgt/xKIDZuquSgCoXy5OWBFFR4=
 github.com/standards-lab/sqlate/postgres v0.9.0 h1:l6PXEZ3GQM4+0zekxlSONhyHjpQU8g8StAS16bBqzZE=

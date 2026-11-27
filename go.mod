@@ -6,7 +6,7 @@ require (
 	github.com/standards-lab/go-core v0.12.0
 	github.com/standards-lab/go-database v0.13.0
 	github.com/standards-lab/go-database/postgres v0.7.0
-	github.com/standards-lab/go-web-sdk v0.18.0
+	github.com/standards-lab/go-web-sdk v0.19.0
 	github.com/standards-lab/sqlate v0.8.0
 	github.com/standards-lab/sqlate/postgres v0.9.0
 	github.com/standards-lab/sqlate/postgres/pgvector v0.1.0
