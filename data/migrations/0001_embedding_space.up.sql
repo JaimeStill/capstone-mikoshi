@@ -2,7 +2,7 @@
 -- own migration registers with its partial index. A space is identified by
 -- its capability, served model, document-convention settings, and
 -- dimensions; the metric and the query prefix are registered attributes.
--- See capstone-data-intelligence context/chunks.md, "Embedding space".
+-- See https://github.com/JaimeStill/capstone-data-intelligence/blob/main/context/chunks.md#embedding-space
 CREATE TABLE embedding_space (
   id integer PRIMARY KEY,
   capability text NOT NULL,

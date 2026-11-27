@@ -5,7 +5,7 @@
 -- in a separate vector store); each space's migration adds its partial
 -- index over the cast to its dimensions. A row holds exactly one of a
 -- vector or the error the space's endpoint returned.
--- See capstone-data-intelligence context/chunks.md, "Embedding".
+-- See https://github.com/JaimeStill/capstone-data-intelligence/blob/main/context/chunks.md#embedding
 CREATE TABLE embedding (
   chunk_text_sha256 text NOT NULL,
   space integer NOT NULL,

@@ -5,7 +5,7 @@
 -- native form of the pgvector extension; another engine expresses a
 -- per-space approximate nearest-neighbour index differently or not at
 -- all). The index's cast refuses a vector of other dimensions in space 1.
--- See capstone-data-intelligence context/chunks.md, "Embedding".
+-- See https://github.com/JaimeStill/capstone-data-intelligence/blob/main/context/chunks.md#embedding
 INSERT INTO embedding_space (id, capability, served_model, settings, dimensions, metric, query_prefix)
 VALUES (1, 'embeddings', 'intfloat/multilingual-e5-large',
   '{"request":"1","input_type":"document","prefix":"passage: "}', 1024, 'cosine', 'query: ');
