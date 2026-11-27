@@ -67,6 +67,9 @@ migrations below, and leaves the configuration's shape and the other packages as
   with its GIN index. Another engine uses its own full-text index.
 - `0008_context`: `jsonb` for a query context's filter, checked with `jsonb_typeof` and
   `jsonb_array_length`, and `timestamptz` with its `now()` default for the creation time.
+- `0009_upload`: the `~` `CHECK` on the upload's SHA-256, `bytea` for its hash state, and
+  `timestamptz` for its expiry.
+- `0010_upload_chunk`: `bytea` for a chunk's content.
 
 A port also changes the native statement files:
 

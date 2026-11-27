@@ -9,6 +9,8 @@
 //   - [Database] makes an empty throwaway database through sqlate's
 //     pgtest, on the PostgreSQL server whose admin DSN [DSNEnv] holds, and
 //     drops it when the test ends.
+//   - [Migrated] makes such a database with Mikoshi's migrations applied,
+//     for a test that runs a domain's store without a service process.
 //   - [Bucket] makes a client of one bucket on the SeaweedFS S3 gateway
 //     whose endpoint [StorageEnv] holds, the gateway every service process
 //     stores its objects in.

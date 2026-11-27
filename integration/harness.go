@@ -12,7 +12,11 @@ import (
 	"github.com/standards-lab/go-storage"
 	"github.com/standards-lab/go-storage/s3"
 	"github.com/standards-lab/go-web-sdk/webtest"
+	"github.com/standards-lab/sqlate/migrate"
 	"github.com/standards-lab/sqlate/postgres/pgtest"
+	"github.com/standards-lab/sqlate/postgres/pgvector"
+
+	"github.com/JaimeStill/capstone-mikoshi/data"
 )
 
 // DSNEnv names the environment variable that holds the admin DSN of the
@@ -72,6 +76,16 @@ type Service struct {
 func Database(t testing.TB) *pgtest.Database {
 	t.Helper()
 	return pgtest.Create(t, DSNEnv, databasePrefix)
+}
+
+// Migrated creates a throwaway database as [Database] does and applies
+// Mikoshi's migration set to it, declaring pgvector as the service's
+// migrator does, for a test that runs a domain's store against the schema
+// without a service process.
+func Migrated(t testing.TB) *pgtest.Database {
+	t.Helper()
+	opts := migrate.Options{Extensions: []migrate.Extension{{Name: pgvector.Extension}}}
+	return pgtest.MigratedWith(t, DSNEnv, databasePrefix, opts, data.Migrations())
 }
 
 // Start runs the service with opts and returns once it is live: Launch
