@@ -1,0 +1,19 @@
+# sqlint: the module's SQL conventions, run by `mise run check`.
+# See docs/stack.md
+
+engine = "github.com/standards-lab/sqlate/postgres"
+extensions = ["github.com/standards-lab/sqlate/postgres/pgvector"]
+
+[sources]
+sql = "github.com/standards-lab/sqlate"
+
+[statements]
+dirs = ["domain/*/statements", "data/statements"]
+verb_named = true
+delimiter = true
+native_forms = true
+guard = true
+
+[migrations]
+dirs = ["data/migrations"]
+single_statement = true

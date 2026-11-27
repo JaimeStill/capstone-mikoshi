@@ -12,17 +12,17 @@
     "@eslint-community/eslint-plugin-eslint-comments": "4.8.1",
     "@eslint/js": "10.0.1",
     "@standards-lab/web-tooling": "github:standards-lab/web-tooling#v0.1.0",
-    "@types/node": "26.6.6",
-    "eslint": "10.15.0",
+    "@types/node": "26.6.11",
+    "eslint": "10.16.0",
     "eslint-import-resolver-typescript": "4.4.5",
-    "eslint-plugin-boundaries": "7.4.4",
+    "eslint-plugin-boundaries": "7.4.5",
     "eslint-plugin-import-x": "4.18.1",
     "globals": "17.14.0",
     "prettier": "3.10.1",
-    "rolldown": "1.2.19",
+    "rolldown": "1.3.4",
     "typescript": "6.0.3",
-    "typescript-eslint": "8.73.0",
-    "vite": "8.3.8",
+    "typescript-eslint": "8.74.0",
+    "vite": "8.4.0",
     "vite-plugin-standard-css-modules": "0.3.0"
   }
 }

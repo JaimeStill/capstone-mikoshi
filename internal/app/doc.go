@@ -4,8 +4,8 @@
 // the layer files are the architecture's layer list:
 //
 //   - infrastructure.go: defineInfrastructure, the lifecycle configuration
-//     and the services the application is composed on (the logger and the
-//     database pool);
+//     and the services the application is composed on (the logger, the
+//     database pool, and the sql node over it);
 //   - admin.go: defineAdmin, the quiesce gate and the administrative
 //     services, and their /admin mount;
 //   - domain.go: defineDomain, the domain services, and their /api mount;
@@ -65,18 +65,21 @@
 //
 // The infrastructure layer holds the lifecycle config the Coordinator is
 // configured from and the services the application is composed on, read
-// from the config node: the logger, written to the writer node, and the
+// from the config node: the logger, written to the writer node; the
 // database, the PostgreSQL pool go-database's postgres provider constructs
-// from the configuration's database block; storage or an auth client as the
-// service grows, each its own node, with any order it needs declared on its
-// Define line. The composition root is the only package that imports the
-// provider; every package below it receives the pool as a go-database
-// database.DB. The pool's Start pings the database, so an unreachable
-// database fails startup with an error naming the database node, and its
-// Ready joins the readiness probe under that name. A service whose value
-// implements lifecycle.Subsystem takes part in startup and shutdown
-// through its own methods, and its constructor opens nothing: connectivity
-// belongs to its Start, so a failed Build leaks no connections.
+// from the configuration's database block; and the sql node, the pool's
+// session wrapped in sqlate's PostgreSQL dialect and grouped with the
+// pattern catalog as a data.Database. Each service is its own node, with
+// any order it needs declared on its Define line. The composition root is
+// the only package that imports the provider: the admin service receives
+// the pool as a go-database database.DB, and the domains receive the sql
+// node's data.Database. The pool's Start pings the database, so an
+// unreachable database fails startup with an error naming the database
+// node, and its Ready joins the readiness probe under that name. A service
+// whose value implements lifecycle.Subsystem takes part in startup and
+// shutdown through its own methods, and its constructor opens nothing:
+// connectivity belongs to its Start, so a failed Build leaks no
+// connections.
 //
 // The admin layer is the administrative counterpart of the domain layer:
 // one node per admin domain, each administering one infrastructure service
@@ -88,11 +91,16 @@
 // with Use. Mikoshi's one admin domain is the schema: go-database's admin
 // service over the pool, a sqlate session wrapped in the PostgreSQL
 // dialect, and a migrator over data.Migrations that declares pgvector by
-// name only, with no seeder and no seed state. Its Start installs the
-// version of pgvector the image offers, failing before any migration when
-// the image offers none, then applies the set; its Ready joins the
-// readiness probe under the schema's name, false while a migration or the
-// declaration is pending or mismatched. Its route group, the admin/database
+// name only, with no seeder and no seed state, and the sql node's
+// statements registry as its inventory. The node's value is a [Schema],
+// which Uses every domain node so each has registered its statements
+// before it is built. Its Start installs the version of pgvector the image
+// offers, failing before any migration when the image offers none, then
+// applies the set, then prepares every registered statement against the
+// migrated schema (data.Database.Verify), so a statement that does not fit
+// fails startup with an error naming the schema node and the statement;
+// its Ready joins the readiness probe under the schema's name, false while
+// a migration or the declaration is pending or mismatched. Its route group, the admin/database
 // package's /database, mounts into the /admin group over the schema node
 // and the gate node, so the server reaches the schema through the router.
 // The gate is a fresh go-core reactor.Gate, the process's quiesce gate:
@@ -112,8 +120,9 @@
 // process. Each domain layer's route group mounts into the /api group, its
 // handler handed, at the construction site, its service, its policy from
 // the config node (cfg.Reads.Limits() for a collection read), and the
-// logger for its error writer (web.NewErrorWriter(logger, ...)). The
-// template defines none and ships the /api group empty.
+// logger for its error writer (web.NewErrorWriter(logger, ...)). Mikoshi's
+// one domain layer is contexts, the context tree, built over the sql node
+// and mounted at /api/contexts with the read limits allowing a cursor.
 //
 // A reactor runs for the process lifetime, driven by an occurrence (a
 // subscription, an interval, a wake on demand) rather than a caller, the

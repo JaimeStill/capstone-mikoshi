@@ -16,7 +16,6 @@ the capstone's domain, not theirs.
 
 ## Capability map
 
-- **Context tree** (planned): the `capstone.data-intelligence.mikoshi` goal, `standards-lab/roadmap/capstone.data-intelligence.mikoshi.toml`.
 - **Items: files, records, and analyses** (planned): the `capstone.data-intelligence.mikoshi` goal, `standards-lab/roadmap/capstone.data-intelligence.mikoshi.toml`.
 - **Batch commit** (planned): `ingest` commits chunks and their embeddings into the records **Database** holds; the `capstone.data-intelligence.mikoshi` goal, `standards-lab/roadmap/capstone.data-intelligence.mikoshi.toml`.
 - **Hybrid search** (planned): the `capstone.data-intelligence.mikoshi` goal, `standards-lab/roadmap/capstone.data-intelligence.mikoshi.toml`.
@@ -25,5 +24,6 @@ the capstone's domain, not theirs.
 - **Lineage** (planned): the `capstone.data-intelligence.mikoshi` goal, `standards-lab/roadmap/capstone.data-intelligence.mikoshi.toml`.
 - **Signal-flow view** (planned): the `capstone.data-intelligence.mikoshi` goal, `standards-lab/roadmap/capstone.data-intelligence.mikoshi.toml`.
 - **The web boundary** (built): the browser client in [`web/`](../web/README.md), which the binary embeds and serves at `/` (`internal/app/client.go`), its `src/` layers held to one import direction by its lint.
-- **Database** (built): PostgreSQL 19 with pgvector, which the composition root opens and migrates at startup (`internal/app/infrastructure.go`, `internal/app/admin.go`); the migrations in [`data/migrations`](../data/migrations) create the chunks contract's records and set A's embedding space, ID 1, and [Stack](../docs/stack.md) names the packages that may use pgvector.
+- **Database** (built): PostgreSQL 19 with pgvector, which the composition root opens and migrates at startup and then checks every registered statement against (`internal/app/infrastructure.go`, `internal/app/admin.go`); the migrations in [`data/migrations`](../data/migrations) create the chunks contract's records, set A's embedding space, ID 1, and the context table, and [Stack](../docs/stack.md) names the packages that may use pgvector and how sqlint holds each statement file to its tier.
+- **Context tree** (built): the `domain/contexts` package serves explicit and query contexts under `/api/contexts` and resolves a context to its subtree ([Contexts](../docs/contexts.md)).
 - **Database administration** (built): the `admin/database` package serves go-database's admin operations at `/admin/database` ([Admin](../docs/admin.md)).

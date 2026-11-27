@@ -19,17 +19,27 @@ features. Everything pgvector adds (the `vector` type, the `hnsw` index method, 
 Only these packages import a provider or use pgvector:
 
 - The composition root, `internal/app`. `infrastructure.go` opens the pool through go-database's
-  `postgres` provider. `admin.go` wraps the pool in sqlate's `postgres` dialect and declares
-  pgvector to the migrator by name, from sqlate's `postgres/pgvector`.
+  `postgres` provider, and its `sql` node wraps the pool in sqlate's `postgres` dialect. `admin.go`
+  declares pgvector to the migrator by name, from sqlate's `postgres/pgvector`.
 - The migrations, `data/migrations`, which create the `vector` column and space 1's HNSW index.
 - The admin domain, `admin/database`, through go-database's admin service alone: it reports
   pgvector's status in the schema status and imports no provider.
 
-Every other package receives the pool as a go-database `database.DB` and stays provider-free.
-The integration harness and suite sit outside the service's process and reach the database
-directly: the harness makes each test's database through sqlate's `postgres/pgtest`, and the
-suite names pgvector from `postgres/pgvector` and runs pgvector queries to prove the index. The
-boundary is a convention held in review; no linter enforces it.
+Every other package stays provider-free: the admin service receives the pool as a go-database
+`database.DB`, and the domains receive the `sql` node's `data.Database`, the dialect-wrapped
+session and the pattern catalog their statements compile against. The integration harness and
+suite sit outside the service's process and reach the database directly: the harness makes each
+test's database through sqlate's `postgres/pgtest`, and the suite names pgvector from
+`postgres/pgvector` and runs pgvector queries to prove the index. The package boundary is a
+convention held in review.
+
+sqlint holds each statement file to its tier. `mise run check` runs it under
+[`sqlint.toml`](../sqlint.toml), which fails a statement file in `domain/*/statements` or
+`data/statements` that is headed `tier: standard` and uses a native form PostgreSQL or pgvector
+declares. One statement file is native tier:
+[`data/statements/lock.sql`](../data/statements/lock.sql), the context tree's advisory lock,
+`pg_advisory_xact_lock` over `hashtext`. sqlint does not check the migrations' forms, so review
+holds the migrations list below.
 
 ## What a provider swap changes
 
@@ -48,5 +58,11 @@ migrations below, and leaves the configuration's shape and the other packages as
 - `0005_source_occurrence`, `0006_source`: the `~` `CHECK`s on the SHA-256 columns.
 - `0007_chunk`: the `~` `CHECK`s, and the stored generated `to_tsvector('simple', text)` column
   with its GIN index. Another engine uses its own full-text index.
+- `0008_context`: `jsonb` for a query context's filter, checked with `jsonb_typeof` and
+  `jsonb_array_length`, and `timestamptz` with its `now()` default for the creation time.
 
-Mikoshi has no statement files. A statement file that uses a native form joins this list.
+A port also changes the native statement files:
+
+- `data/statements/lock.sql`: the advisory lock. Its header names the replacements:
+  `sp_getapplock` (SQL Server), `GET_LOCK` (MySQL), `DBMS_LOCK` (Oracle), or a `FOR UPDATE`
+  mutex row.

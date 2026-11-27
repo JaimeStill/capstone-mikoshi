@@ -1,17 +1,22 @@
 # Admin
 
-The database admin service is mounted under `/admin/database`. Each endpoint calls the go-database
-admin service that startup runs its verify and up through; the schema verbs answer with the
-resulting schema status.
+The database admin service is mounted under `/admin/database`. Each endpoint calls go-database's
+admin service, the one startup runs its verify and up through, and the schema verbs answer with
+the resulting schema status.
+
+Once the schema is current, startup also prepares every registered statement against it, and a
+statement that does not fit fails startup with an error naming it. The `verify` endpoint does not
+check statements: go-database's admin service checks them only through a seeder, and Mikoshi
+configures none.
 
 | Method | Path | What it does |
 |--------|------|--------------|
 | `GET` | `/admin/database/diagnostics` | Ping latency, server version, pool counters |
 | `GET` | `/admin/database/schema` | The migration set's history against its embedded migrations, and pgvector's status |
 | `GET` | `/admin/database/patterns` | The pattern catalog |
-| `GET` | `/admin/database/statements` | The compiled statements |
+| `GET` | `/admin/database/statements` | The compiled statements, by registered domain |
 | `GET` | `/admin/database/states` | The named states, an empty list |
-| `POST` | `/admin/database/schema/verify` | Verify the set's history and every statement |
+| `POST` | `/admin/database/schema/verify` | Verify the set's history and pgvector's declaration |
 | `POST` | `/admin/database/schema/up` | Apply the pending migrations |
 | `POST` | `/admin/database/schema/down` | Revert `{"set": "app", "steps": 1}`, one step by default |
 | `POST` | `/admin/database/schema/steps` | Apply or revert `{"set": "app", "steps": n}`, negative to revert |

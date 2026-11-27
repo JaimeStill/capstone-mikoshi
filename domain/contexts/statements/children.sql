@@ -1,0 +1,11 @@
+--| tier: standard
+--| key: id
+--| field: id uuid not null
+--| field: parent_id uuid
+--| field: name text not null
+--| field: kind text not null
+--| field: created_at timestamp with time zone not null
+-- The direct children of one context, as the read returns each. The SELECT
+-- list is the scan order. name and id are declared not null, as the table
+-- holds them, so the read by name continues by cursor.
+SELECT id, parent_id, name, kind, filter, created_at FROM context WHERE parent_id = {{parent_id:uuid}}
