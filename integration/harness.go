@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/standards-lab/go-core/process/processtest"
 	"github.com/standards-lab/go-web-sdk/webtest"
@@ -17,6 +18,14 @@ import (
 const DSNEnv = "MIKOSHI_INTEGRATION_DSN"
 
 const databasePrefix = "mikoshi"
+
+// ServiceZone is the time zone every service process runs in, through TZ:
+// one whose offset is never zero (+05:30 all year, with no daylight
+// saving), so a time the service encodes in time.Local rather than
+// time.UTC shows an offset in its JSON on any date. The process reads the
+// host's zone database, so a host without the zone fails the launch
+// rather than running the service in UTC.
+const ServiceZone = "Asia/Kolkata"
 
 // Main is the suite's TestMain: it builds cmd/server once, with the race
 // detector so the service runs under it too, runs the tests, and removes
@@ -94,7 +103,11 @@ func environment(t testing.TB, opts Options, addr, dsn string) []string {
 		t.Fatalf("parse database DSN: %v", err)
 	}
 	password, _ := u.User.Password()
+	if _, err := time.LoadLocation(ServiceZone); err != nil {
+		t.Fatalf("load the service zone from the host's zone database: %v", err)
+	}
 	env := []string{
+		"TZ=" + ServiceZone,
 		"MIKOSHI_ENV=",
 		"MIKOSHI_LOG_LEVEL=debug",
 		"MIKOSHI_LOG_FORMAT=text",

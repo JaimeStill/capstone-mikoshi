@@ -17,6 +17,7 @@ import (
 	"time"
 	"uuid"
 
+	"github.com/standards-lab/go-core/process/processtest"
 	"github.com/standards-lab/go-web-sdk"
 	"github.com/standards-lab/go-web-sdk/webtest"
 	"github.com/standards-lab/sqlate/postgres/pgtest"
@@ -563,7 +564,7 @@ func TestContexts_SubtreeResolution(t *testing.T) {
 
 func TestContexts_WalksTerminateOnACycle(t *testing.T) {
 	s, db, c := domainService(t)
-	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), processtest.Failsafe)
 	defer cancel()
 
 	a := createContext(t, c, explicit(contexts.Root, "a"))

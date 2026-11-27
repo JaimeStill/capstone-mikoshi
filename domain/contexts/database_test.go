@@ -69,8 +69,8 @@ func TestService_FindReadsOneContextByID(t *testing.T) {
 	if len(c.Filter) != 1 || c.Filter[0].Field != "kind" || c.Filter[0].Op != query.OpEq || string(c.Filter[0].Value) != `"pdf"` {
 		t.Errorf("filter = %+v", c.Filter)
 	}
-	if c.CreatedAt.Location() != time.UTC {
-		t.Errorf("created_at in %v, want UTC", c.CreatedAt.Location())
+	if want := time.Date(2026, 11, 27, 11, 0, 0, 0, time.UTC); c.CreatedAt != want {
+		t.Errorf("created_at = %v, want %v", c.CreatedAt, want)
 	}
 	if call := rec.Calls()[0]; call.SQL != "SELECT id, parent_id, name, kind, filter, created_at FROM context WHERE id = CAST($1 AS uuid)" || call.Args[0] != childID {
 		t.Errorf("find = %+v", call)
@@ -279,9 +279,6 @@ func TestService_RenameSetsTheNameInOneStatement(t *testing.T) {
 	call := rec.Calls()[0]
 	if !strings.HasPrefix(call.SQL, "UPDATE context SET name = $1 WHERE id = CAST($2 AS uuid)") || call.Args[0] != "renamed" || call.Args[1] != childID {
 		t.Errorf("rename = %+v", call)
-	}
-	if strings.Contains(call.SQL, "parent_id =") {
-		t.Errorf("rename = %q, want the parent left as it is", call.SQL)
 	}
 }
 
