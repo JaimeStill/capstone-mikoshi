@@ -18,20 +18,24 @@ import (
 	"github.com/standards-lab/go-web-sdk"
 
 	"github.com/JaimeStill/capstone-mikoshi/data"
+	"github.com/JaimeStill/capstone-mikoshi/domain/contexts"
 )
 
 // Service is the items domain service: the layer's public API, the reads,
-// the file create, and the record create, every operation delegated to
-// the store.
+// the file create, the record create, and the placing and withdrawing of
+// an item's reference in a context, every operation delegated to the
+// store.
 type Service struct {
 	store *store
+	tree  *contexts.Service
 }
 
-// New constructs the service over the database the domains share and the
-// object store its blobs are kept in. Construction compiles and binds the
+// New constructs the service over the database the domains share, the
+// object store its blobs are kept in, and the contexts service it resolves
+// a reference's context through. Construction compiles and binds the
 // statements and performs no I/O.
-func New(db *data.Database, objects *storage.Store) *Service {
-	return &Service{store: newStore(db, objects)}
+func New(db *data.Database, objects *storage.Store, tree *contexts.Service) *Service {
+	return &Service{store: newStore(db, objects), tree: tree}
 }
 
 // Find returns the item with the given id, or sql.ErrNoRows. A malformed
@@ -135,6 +139,52 @@ func (s *Service) CreateRecord(ctx context.Context, c CreateRecord, content []by
 	}
 	n.route, n.kind = r, kind
 	return s.store.createOver(ctx, n, body)
+}
+
+// Place places the item with the given id in the explicit context with the
+// given id, by reference. A reference already in place is left as it is,
+// so a repeated call changes nothing. A malformed id is ErrValidation, an
+// unknown context ErrContextNotFound, a query context ErrQueryContext, and
+// an unknown item ErrItemNotFound. A context deleted between its read and
+// the placing is ErrContextNotFound, and a context deleted after the
+// placing takes the reference with it.
+func (s *Service) Place(ctx context.Context, contextID, itemID string) error {
+	if err := s.explicit(ctx, contextID, itemID); err != nil {
+		return err
+	}
+	return s.store.place(ctx, contextID, itemID)
+}
+
+// Withdraw removes the reference of the item with the given id from the
+// explicit context with the given id. A reference not in place is left
+// absent, so a repeated call changes nothing. A malformed id is
+// ErrValidation, an unknown context ErrContextNotFound, a query context
+// ErrQueryContext, and an unknown item ErrItemNotFound.
+func (s *Service) Withdraw(ctx context.Context, contextID, itemID string) error {
+	if err := s.explicit(ctx, contextID, itemID); err != nil {
+		return err
+	}
+	return s.store.withdraw(ctx, contextID, itemID)
+}
+
+func (s *Service) explicit(ctx context.Context, contextID, itemID string) error {
+	if _, err := uuid.Parse(contextID); err != nil {
+		return fmt.Errorf("%w: context id must be a UUID", ErrValidation)
+	}
+	if _, err := uuid.Parse(itemID); err != nil {
+		return fmt.Errorf("%w: item id must be a UUID", ErrValidation)
+	}
+	c, err := s.tree.Find(ctx, contextID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("%w: %s", ErrContextNotFound, contextID)
+	}
+	if err != nil {
+		return err
+	}
+	if c.Kind == contexts.KindQuery {
+		return fmt.Errorf("%w: %s", ErrQueryContext, contextID)
+	}
+	return nil
 }
 
 func sniff(content io.ReaderAt, size int64, name, mediaType string) (string, *string, error) {

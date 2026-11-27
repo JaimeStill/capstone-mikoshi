@@ -54,8 +54,10 @@ domain will check them against its item projection and evaluate the filters.
 
 ## Membership and retrieval
 
-Membership is planned in the items domain, and a context's memberships will be deleted with the
-context.
+Membership belongs to the items domain, which places an item in an explicit context with `PUT
+/api/contexts/{id}/items/{item}` and withdraws it with `DELETE` on the same path. Its table,
+`context_item`, cascades from `context`, so a context's memberships are deleted with the context,
+by the delete of its subtree.
 
 Retrieval narrows chunks through the tree. A context resolves to an item-id set: the explicit
 members of every explicit context in its subtree, plus each query context's matches over all

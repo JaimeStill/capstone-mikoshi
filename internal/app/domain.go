@@ -31,7 +31,7 @@ func (n *Nodes) newUploads(s *graph.Scope) (*uploads.Service, error) {
 }
 
 func (n *Nodes) newItems(s *graph.Scope) (*items.Service, error) {
-	return items.New(s.Use(n.SQL), s.Use(n.Storage)), nil
+	return items.New(s.Use(n.SQL), s.Use(n.Storage), s.Use(n.Contexts)), nil
 }
 
 func mountAPI(s *graph.Scope, n *Nodes) *web.Group {
@@ -44,6 +44,7 @@ func mountAPI(s *graph.Scope, n *Nodes) *web.Group {
 	transfer := cfg.Server.Transfer(*cfg.Uploads.MaxAppendSize)
 	api.Mount(contexts.Routes(s.Use(n.Contexts), reads, logger))
 	api.Mount(items.Routes(itemService, reads, transfer, logger))
+	api.Mount(items.ReferenceRoutes(itemService, logger))
 	api.Mount(upload.Handler{
 		Store:    s.Use(n.Uploads),
 		Transfer: transfer,

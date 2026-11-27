@@ -28,6 +28,7 @@ import (
 	"github.com/standards-lab/sqlate/query"
 
 	"github.com/JaimeStill/capstone-mikoshi/data"
+	"github.com/JaimeStill/capstone-mikoshi/domain/contexts"
 	"github.com/JaimeStill/capstone-mikoshi/domain/items"
 	"github.com/JaimeStill/capstone-mikoshi/integration"
 )
@@ -466,7 +467,7 @@ func itemService(t *testing.T) (*items.Service, *pgtest.Database) {
 	t.Helper()
 	db := integration.Migrated(t)
 	d := data.New(db.Session(), query.MustCatalog(query.Patterns()))
-	s := items.New(d, integration.Objects(t, bucketName()))
+	s := items.New(d, integration.Objects(t, bucketName()), contexts.New(d))
 	if err := d.Verify(t.Context()); err != nil {
 		t.Fatalf("verify the items statements: %v", err)
 	}
@@ -581,6 +582,183 @@ func TestItems_SchemaHoldsTheItemRules(t *testing.T) {
 		{"a second item for one upload", "uq_item_upload", item(uuid.NewV7().String(), "file", digest, "'u1'")},
 		{"a blob in another status", "cc_blob_status", `INSERT INTO blob (sha256, size, status) VALUES ('` + hexDigest([]byte("x")) + `', 1, 'deleting')`},
 		{"a blob an item names deleted", "fk_item_blob", `DELETE FROM blob WHERE sha256 = '` + digest + `'`},
+	}
+	for _, r := range refused {
+		_, err := db.Pool.ExecContext(ctx, r.query)
+		if want := `constraint "` + r.constraint + `"`; err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s = %v, want it refused by %s", r.name, err, r.constraint)
+		}
+	}
+}
+
+func postRecord(t *testing.T, c *webtest.Client, name string) items.Item {
+	t.Helper()
+	return webtest.Decode[items.Item](t, c.Post(t, "/api/items", `{"name":"`+name+`"}`, recordName(name+".json")), http.StatusCreated)
+}
+
+func referencePath(contextID, itemID string) string {
+	return "/api/contexts/" + contextID + "/items/" + itemID
+}
+
+func references(t *testing.T, db *pgtest.Database, contextID string) int {
+	t.Helper()
+	return countRows(t, db, "SELECT COUNT(*) FROM context_item WHERE context_id = $1", contextID)
+}
+
+func TestItems_ReferencePlacedAndWithdrawnIdempotently(t *testing.T) {
+	db := integration.Database(t)
+	c := integration.Start(t, integration.Options{Database: db, Env: []string{"MIKOSHI_STORAGE_CONTAINER=" + bucketName()}}).Client()
+	item := postRecord(t, c, "placed")
+	folder := createContext(t, c, explicit(contexts.Root, "folder"))
+	path := referencePath(folder.ID, item.ID)
+
+	for range 2 {
+		if res := c.Put(t, path, nil).Expect(t, http.StatusNoContent); len(res.Body) != 0 {
+			t.Errorf("body = %s, want none", res.Body)
+		}
+		if n := references(t, db, folder.ID); n != 1 {
+			t.Errorf("references = %d, want 1", n)
+		}
+	}
+	c.Put(t, referencePath(contexts.Root, item.ID), nil).Expect(t, http.StatusNoContent)
+	if n := countRows(t, db, "SELECT COUNT(*) FROM context_item WHERE item_id = $1", item.ID); n != 2 {
+		t.Errorf("references of the item = %d, want one in each of 2 contexts", n)
+	}
+
+	for range 2 {
+		if res := c.Delete(t, path).Expect(t, http.StatusNoContent); len(res.Body) != 0 {
+			t.Errorf("body = %s, want none", res.Body)
+		}
+		if n := references(t, db, folder.ID); n != 0 {
+			t.Errorf("references = %d, want none", n)
+		}
+	}
+	if n := references(t, db, contexts.Root); n != 1 {
+		t.Errorf("references in the root = %d, want the one left in place", n)
+	}
+}
+
+func TestItems_ReferenceRefusals(t *testing.T) {
+	db := integration.Database(t)
+	c := integration.Start(t, integration.Options{Database: db, Env: []string{"MIKOSHI_STORAGE_CONTAINER=" + bucketName()}}).Client()
+	item := postRecord(t, c, "refused")
+	saved := createContext(t, c, queryContext(contexts.Root, "saved", `[{"field":"route","op":"eq","value":"text"}]`))
+	folder := createContext(t, c, explicit(contexts.Root, "folder"))
+	unknownContext := uuid.NewV7().String()
+	unknownItem := uuid.NewV7().String()
+
+	refused := []struct {
+		name   string
+		path   string
+		status int
+		detail string
+	}{
+		{"a query context", referencePath(saved.ID, item.ID), http.StatusConflict, items.ErrQueryContext.Error()},
+		{"an unknown context", referencePath(unknownContext, item.ID), http.StatusNotFound, items.ErrContextNotFound.Error()},
+		{"an unknown item", referencePath(folder.ID, unknownItem), http.StatusNotFound, items.ErrItemNotFound.Error()},
+		{"an unknown context and item", referencePath(unknownContext, unknownItem), http.StatusNotFound, items.ErrContextNotFound.Error()},
+		{"a malformed context id", referencePath("not-a-uuid", item.ID), http.StatusBadRequest, ""},
+		{"a malformed item id", referencePath(folder.ID, "not-a-uuid"), http.StatusBadRequest, ""},
+	}
+	for _, r := range refused {
+		for _, method := range []string{http.MethodPut, http.MethodDelete} {
+			t.Run(method+" "+r.name, func(t *testing.T) {
+				p := c.Do(t, method, r.path, nil).Problem(t, r.status)
+				if p.Instance != r.path {
+					t.Errorf("instance = %q, want %s", p.Instance, r.path)
+				}
+				if r.detail != "" && p.Detail != r.detail {
+					t.Errorf("detail = %q, want %q", p.Detail, r.detail)
+				}
+			})
+		}
+	}
+	if n := countRows(t, db, "SELECT COUNT(*) FROM context_item"); n != 0 {
+		t.Errorf("references = %d, want none", n)
+	}
+}
+
+func TestItems_DeletingAContextRemovesItsSubtreesReferences(t *testing.T) {
+	db := integration.Database(t)
+	c := integration.Start(t, integration.Options{Database: db, Env: []string{"MIKOSHI_STORAGE_CONTAINER=" + bucketName()}}).Client()
+	item := postRecord(t, c, "held")
+	other := postRecord(t, c, "other")
+	folder := createContext(t, c, explicit(contexts.Root, "folder"))
+	child := createContext(t, c, explicit(folder.ID, "child"))
+	grandchild := createContext(t, c, explicit(child.ID, "grandchild"))
+	sibling := createContext(t, c, explicit(contexts.Root, "sibling"))
+	for _, id := range []string{folder.ID, child.ID, grandchild.ID, sibling.ID} {
+		c.Put(t, referencePath(id, item.ID), nil).Expect(t, http.StatusNoContent)
+	}
+	c.Put(t, referencePath(grandchild.ID, other.ID), nil).Expect(t, http.StatusNoContent)
+
+	c.Delete(t, "/api/contexts/"+child.ID+"?confirm=1").Expect(t, http.StatusNoContent)
+	for _, id := range []string{child.ID, grandchild.ID} {
+		if n := references(t, db, id); n != 0 {
+			t.Errorf("references in the deleted %s = %d, want none", id, n)
+		}
+	}
+	for _, id := range []string{folder.ID, sibling.ID} {
+		if n := references(t, db, id); n != 1 {
+			t.Errorf("references in the kept %s = %d, want 1", id, n)
+		}
+	}
+
+	c.Delete(t, "/api/contexts/"+folder.ID).Expect(t, http.StatusNoContent)
+	if n := countRows(t, db, "SELECT COUNT(*) FROM context_item"); n != 1 {
+		t.Errorf("references = %d, want the sibling's alone", n)
+	}
+	for _, id := range []string{item.ID, other.ID} {
+		c.Get(t, "/api/items/"+id).Expect(t, http.StatusOK)
+	}
+}
+
+func TestItems_ReferenceRacingAContextDeleteIsNeverAServerError(t *testing.T) {
+	db := integration.Database(t)
+	c := integration.Start(t, integration.Options{Database: db, Env: []string{"MIKOSHI_STORAGE_CONTAINER=" + bucketName()}}).Client()
+	item := postRecord(t, c, "raced")
+
+	for i := range 20 {
+		folder := createContext(t, c, explicit(contexts.Root, fmt.Sprintf("raced %d", i)))
+		var placed, deleted int
+		var wg sync.WaitGroup
+		wg.Go(func() { placed = c.Put(t, referencePath(folder.ID, item.ID), nil).Status })
+		wg.Go(func() { deleted = c.Delete(t, "/api/contexts/"+folder.ID).Status })
+		wg.Wait()
+		if placed != http.StatusNoContent && placed != http.StatusNotFound {
+			t.Errorf("round %d: placing = %d, want 204 or 404", i, placed)
+		}
+		if deleted != http.StatusNoContent {
+			t.Errorf("round %d: delete = %d, want 204", i, deleted)
+		}
+		if n := references(t, db, folder.ID); n != 0 {
+			t.Errorf("round %d: references in the deleted context = %d, want none", i, n)
+		}
+	}
+}
+
+func TestItems_SchemaHoldsTheReferenceRules(t *testing.T) {
+	db := integration.Migrated(t)
+	ctx := t.Context()
+	digest := hexDigest([]byte("referenced"))
+	itemID := uuid.NewV7().String()
+	for _, stmt := range []string{
+		`INSERT INTO blob (sha256, size, status) VALUES ('` + digest + `', 10, 'available')`,
+		`INSERT INTO item (id, type, name, media_type, sha256, size, route) VALUES ('` + itemID + `', 'record', 'n', 'application/json', '` + digest + `', 10, 'text')`,
+		`INSERT INTO context_item (context_id, item_id) VALUES ('` + contexts.Root + `', '` + itemID + `')`,
+	} {
+		if _, err := db.Pool.ExecContext(ctx, stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	refused := []struct {
+		name, constraint, query string
+	}{
+		{"a reference placed twice", "pk_context_item", `INSERT INTO context_item (context_id, item_id) VALUES ('` + contexts.Root + `', '` + itemID + `')`},
+		{"a reference to no context", "fk_context_item_context", `INSERT INTO context_item (context_id, item_id) VALUES ('` + uuid.NewV7().String() + `', '` + itemID + `')`},
+		{"a reference to no item", "fk_context_item_item", `INSERT INTO context_item (context_id, item_id) VALUES ('` + contexts.Root + `', '` + uuid.NewV7().String() + `')`},
+		{"a referenced item deleted", "fk_context_item_item", `DELETE FROM item WHERE id = '` + itemID + `'`},
 	}
 	for _, r := range refused {
 		_, err := db.Pool.ExecContext(ctx, r.query)

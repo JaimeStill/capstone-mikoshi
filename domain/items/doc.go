@@ -2,7 +2,9 @@
 // contexts hold, served under /api/items as a record create, a read by id,
 // and a paged read of every item, and created from a completed upload by
 // the Complete function the composition root hands go-web-sdk's upload
-// handler. An item is a named entry over a blob: content-keyed bytes, kept
+// handler. It owns the references that place items in explicit contexts,
+// served under /api/contexts/{id}/items/{item}, and resolves a reference's
+// context through the contexts service, which imports nothing from it. An item is a named entry over a blob: content-keyed bytes, kept
 // in the object store at sha256/<hex> and shared by every item with that
 // digest. An item is a file, from a completed upload, or a record, from a
 // posted JSON body stored byte for byte as application/json; its route and
@@ -20,15 +22,26 @@
 // constraint, so a repeated or overlapping completion returns the item
 // the first created. A record create is idempotent on nothing.
 //
+// A reference is a row naming one explicit context and one item, placed
+// and withdrawn idempotently. Its context's kind never changes, so a
+// reference reads the context before it writes and takes no tree lock: a
+// context deleted between the two fails the reference's foreign key, and
+// one deleted after it takes the reference with it, by the cascade from
+// the context.
+//
 // The package's API:
 //
-//   - [Service], built by [New]: the reads, the file create, and the
-//     record create.
-//   - [Routes]: the route group the composition root mounts.
+//   - [Service], built by [New]: the reads, the file create, the record
+//     create, and the reference's placing and withdrawing.
+//   - [Routes] and [ReferenceRoutes]: the route groups the composition
+//     root mounts.
 //   - [Completion]: the upload handler's Complete function.
 //   - [Item] and [Type] with [TypeFile] and [TypeRecord]: the read shape
 //     and the item types.
 //   - [CreateFile] and [CreateRecord]: the create commands' inputs, each
 //     validating itself.
 //   - [ErrValidation]: a refused input, a 400.
+//   - [ErrContextNotFound] and [ErrItemNotFound]: a reference's unknown
+//     context or item, a 404; [ErrQueryContext]: a reference to a query
+//     context, a 409.
 package items

@@ -46,6 +46,24 @@ func Routes(service *Service, limits web.Limits, records web.Transfer, logger *s
 	return g
 }
 
+// ReferenceRoutes builds the layer's second route group, /contexts, which
+// the composition root mounts beside the contexts layer's group of the
+// same prefix: the placing of an item in a context, a PUT of
+// /{id}/items/{item}, and the withdrawing of its reference, a DELETE of the
+// same path, each answering 204 whether or not the reference was in place
+// before. logger records the cause of every 5xx the group's error writer
+// sends. Every refusal is a problem response: a malformed id a 400, an
+// unknown context or item a 404, a query context a 409, and an unreachable
+// database a 503.
+func ReferenceRoutes(service *Service, logger *slog.Logger) *web.Group {
+	h := &handler{service: service}
+	g := web.NewGroup("/contexts")
+	g.SetErrorWriter(web.NewErrorWriter(logger, status))
+	g.HandleErr("PUT", "/{id}/items/{item}", h.place)
+	g.HandleErr("DELETE", "/{id}/items/{item}", h.withdraw)
+	return g
+}
+
 // Completion returns the Complete function of go-web-sdk's upload
 // handler: it creates the file item for the completed upload through
 // [Service.CreateFile] and answers 201 with the item and a Location of
@@ -134,12 +152,54 @@ func (h *handler) list(w http.ResponseWriter, r *http.Request) error {
 	return web.WriteJSON(w, http.StatusOK, web.NewPage(items, q, paging))
 }
 
+func (h *handler) place(w http.ResponseWriter, r *http.Request) error {
+	contextID, itemID, err := reference(r)
+	if err != nil {
+		return err
+	}
+	if err := h.service.Place(r.Context(), contextID, itemID); err != nil {
+		return err
+	}
+	w.WriteHeader(http.StatusNoContent)
+	return nil
+}
+
+func (h *handler) withdraw(w http.ResponseWriter, r *http.Request) error {
+	contextID, itemID, err := reference(r)
+	if err != nil {
+		return err
+	}
+	if err := h.service.Withdraw(r.Context(), contextID, itemID); err != nil {
+		return err
+	}
+	w.WriteHeader(http.StatusNoContent)
+	return nil
+}
+
+func reference(r *http.Request) (string, string, error) {
+	contextID, err := web.PathUUID(r, "id")
+	if err != nil {
+		return "", "", err
+	}
+	itemID, err := web.PathUUID(r, "item")
+	if err != nil {
+		return "", "", err
+	}
+	return contextID, itemID, nil
+}
+
 func status(err error) (web.Problem, bool) {
 	switch {
 	case errors.Is(err, ErrValidation), errors.Is(err, query.ErrDirectives):
 		return web.Problem{Status: http.StatusBadRequest}, true
+	case errors.Is(err, ErrContextNotFound):
+		return web.Problem{Status: http.StatusNotFound, Detail: ErrContextNotFound.Error()}, true
+	case errors.Is(err, ErrItemNotFound):
+		return web.Problem{Status: http.StatusNotFound, Detail: ErrItemNotFound.Error()}, true
 	case errors.Is(err, sql.ErrNoRows):
 		return web.Problem{Status: http.StatusNotFound}, true
+	case errors.Is(err, ErrQueryContext):
+		return web.Problem{Status: http.StatusConflict, Detail: ErrQueryContext.Error()}, true
 	case errors.Is(err, database.ErrNotReady), errors.Is(err, sqlate.ErrConnectionFailed):
 		return web.Problem{Status: http.StatusServiceUnavailable}, true
 	}

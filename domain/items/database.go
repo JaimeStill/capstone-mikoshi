@@ -2,7 +2,10 @@ package items
 
 import (
 	"context"
+	"database/sql"
 	"embed"
+	"errors"
+	"fmt"
 	"uuid"
 
 	"github.com/standards-lab/go-storage"
@@ -17,32 +20,36 @@ import (
 var files embed.FS
 
 type store struct {
-	db         *data.Database
-	objects    *storage.Store
-	stmts      *query.Statements
-	findRows   query.Rows[Item]
-	uploadRows query.Rows[Item]
-	list       query.Projection[Item]
-	create     query.Returning[Item]
-	touchBlob  query.Returning[blobRow]
-	createBlob query.Statement
-	markBlob   query.Statement
+	db          *data.Database
+	objects     *storage.Store
+	stmts       *query.Statements
+	findRows    query.Rows[Item]
+	uploadRows  query.Rows[Item]
+	list        query.Projection[Item]
+	create      query.Returning[Item]
+	touchBlob   query.Returning[blobRow]
+	createBlob  query.Statement
+	markBlob    query.Statement
+	placeRef    query.Statement
+	withdrawRef query.Statement
 }
 
 func newStore(db *data.Database, objects *storage.Store) *store {
 	stmts := db.Catalog.MustCompile(files, "statements", db.Dialect())
 	scan := query.Scanner[Item]()
 	s := &store{
-		db:         db,
-		objects:    objects,
-		stmts:      stmts,
-		findRows:   stmts.Statement("find").Scan(scan),
-		uploadRows: stmts.Statement("find_upload").Scan(scan),
-		list:       stmts.Statement("list").Project(scan),
-		create:     stmts.Statement("create").Returning(scan),
-		touchBlob:  stmts.Statement("touch_blob").Returning(query.Scanner[blobRow]()),
-		createBlob: stmts.Statement("create_blob"),
-		markBlob:   stmts.Statement("mark_blob"),
+		db:          db,
+		objects:     objects,
+		stmts:       stmts,
+		findRows:    stmts.Statement("find").Scan(scan),
+		uploadRows:  stmts.Statement("find_upload").Scan(scan),
+		list:        stmts.Statement("list").Project(scan),
+		create:      stmts.Statement("create").Returning(scan),
+		touchBlob:   stmts.Statement("touch_blob").Returning(query.Scanner[blobRow]()),
+		createBlob:  stmts.Statement("create_blob"),
+		markBlob:    stmts.Statement("mark_blob"),
+		placeRef:    stmts.Statement("place"),
+		withdrawRef: stmts.Statement("withdraw"),
 	}
 	db.Register("items", stmts, s)
 	return s
@@ -110,4 +117,32 @@ func (s *store) insert(ctx context.Context, tx *sqlate.Tx, n newItem) (Item, err
 	}
 	created, _, err := s.create.One(ctx, tx, args)
 	return created, err
+}
+
+const constraintReferenceItem = "fk_context_item_item"
+
+func (s *store) place(ctx context.Context, contextID, itemID string) error {
+	_, err := s.placeRef.Exec(ctx, s.db, query.Args{"context_id": contextID, "item_id": itemID})
+	if errors.Is(err, sqlate.ErrUniqueViolation) {
+		return nil
+	}
+	if ce, ok := errors.AsType[*sqlate.ConstraintError](err); ok && errors.Is(err, sqlate.ErrForeignKeyViolation) {
+		if ce.Constraint == constraintReferenceItem {
+			return fmt.Errorf("%w: %s", ErrItemNotFound, itemID)
+		}
+		return fmt.Errorf("%w: %s", ErrContextNotFound, contextID)
+	}
+	return err
+}
+
+func (s *store) withdraw(ctx context.Context, contextID, itemID string) error {
+	n, err := s.withdrawRef.Exec(ctx, s.db, query.Args{"context_id": contextID, "item_id": itemID})
+	if err != nil || n > 0 {
+		return err
+	}
+	_, err = s.find(ctx, itemID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("%w: %s", ErrItemNotFound, itemID)
+	}
+	return err
 }

@@ -12,6 +12,7 @@ import (
 	"github.com/standards-lab/go-web-sdk"
 	"github.com/standards-lab/sqlate/sqltest"
 
+	"github.com/JaimeStill/capstone-mikoshi/domain/contexts"
 	"github.com/JaimeStill/capstone-mikoshi/domain/items"
 )
 
@@ -23,6 +24,20 @@ func routes(t *testing.T, responses ...sqltest.Response) (http.Handler, fixture)
 	r := web.NewRouter()
 	r.Mount(web.NewModule(items.Routes(f.service, web.Limits{DefaultSize: 10, MaxSize: 100}, web.NewTransfer(recordLimit, 1<<20, time.Second), slog.New(slog.DiscardHandler))))
 	return r, f
+}
+
+func referenceRoutes(t *testing.T, responses ...sqltest.Response) (http.Handler, fixture) {
+	t.Helper()
+	f := service(t, responses...)
+	r := web.NewRouter()
+	r.Mount(web.NewModule(items.ReferenceRoutes(f.service, slog.New(slog.DiscardHandler))))
+	return r, f
+}
+
+func serve(h http.Handler, method, path string) *httptest.ResponseRecorder {
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(method, path, nil))
+	return rec
 }
 
 func post(t *testing.T, h http.Handler, disposition string, body []byte) *httptest.ResponseRecorder {
@@ -96,6 +111,65 @@ func TestRoutes_PostRecordRefusals(t *testing.T) {
 			sameOps(t, f.rec)
 			if f.fake.Puts() != 0 {
 				t.Errorf("puts = %d, want none", f.fake.Puts())
+			}
+		})
+	}
+}
+
+func TestReferenceRoutes_PlaceAndWithdrawAnswerNoContent(t *testing.T) {
+	path := "/contexts/" + contextID + "/items/" + itemID
+	cases := []struct {
+		name      string
+		method    string
+		responses []sqltest.Response
+	}{
+		{"a placing", http.MethodPut, []sqltest.Response{contextRow(contexts.KindExplicit), affected(1)}},
+		{"a repeated placing", http.MethodPut, []sqltest.Response{contextRow(contexts.KindExplicit), violation("pk_context_item")}},
+		{"a withdrawing", http.MethodDelete, []sqltest.Response{contextRow(contexts.KindExplicit), affected(1)}},
+		{"a withdrawing of an absent reference", http.MethodDelete, []sqltest.Response{contextRow(contexts.KindExplicit), affected(0), itemRow(pdf, "document", "pdf")}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			h, _ := referenceRoutes(t, c.responses...)
+			if res := serve(h, c.method, path); res.Code != http.StatusNoContent || res.Body.Len() != 0 {
+				t.Errorf("status = %d (body %s), want 204 with no body", res.Code, res.Body)
+			}
+		})
+	}
+}
+
+func TestReferenceRoutes_Refusals(t *testing.T) {
+	path := "/contexts/" + contextID + "/items/" + itemID
+	cases := []struct {
+		name      string
+		method    string
+		path      string
+		responses []sqltest.Response
+		status    int
+		detail    string
+	}{
+		{"a malformed context id", http.MethodPut, "/contexts/x/items/" + itemID, nil, http.StatusBadRequest, ""},
+		{"a malformed item id", http.MethodDelete, "/contexts/" + contextID + "/items/x", nil, http.StatusBadRequest, ""},
+		{"an unknown context", http.MethodPut, path, []sqltest.Response{none()}, http.StatusNotFound, items.ErrContextNotFound.Error()},
+		{"an unknown item", http.MethodPut, path, []sqltest.Response{contextRow(contexts.KindExplicit), foreignKey("fk_context_item_item")}, http.StatusNotFound, items.ErrItemNotFound.Error()},
+		{"a context deleted after its read", http.MethodPut, path, []sqltest.Response{contextRow(contexts.KindExplicit), foreignKey("fk_context_item_context")}, http.StatusNotFound, items.ErrContextNotFound.Error()},
+		{"a query context", http.MethodPut, path, []sqltest.Response{contextRow(contexts.KindQuery)}, http.StatusConflict, items.ErrQueryContext.Error()},
+		{"a withdrawing from a query context", http.MethodDelete, path, []sqltest.Response{contextRow(contexts.KindQuery)}, http.StatusConflict, items.ErrQueryContext.Error()},
+		{"a withdrawing of an unknown item", http.MethodDelete, path, []sqltest.Response{contextRow(contexts.KindExplicit), affected(0), none()}, http.StatusNotFound, items.ErrItemNotFound.Error()},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			h, _ := referenceRoutes(t, c.responses...)
+			res := serve(h, c.method, c.path)
+			if res.Code != c.status || res.Header().Get("Content-Type") != "application/problem+json" {
+				t.Fatalf("status = %d (%s), want a %d problem", res.Code, res.Header().Get("Content-Type"), c.status)
+			}
+			var p web.Problem
+			if err := json.Unmarshal(res.Body.Bytes(), &p); err != nil {
+				t.Fatal(err)
+			}
+			if c.detail != "" && p.Detail != c.detail {
+				t.Errorf("detail = %q, want %q", p.Detail, c.detail)
 			}
 		})
 	}

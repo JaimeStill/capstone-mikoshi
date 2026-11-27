@@ -24,6 +24,7 @@ import (
 	"github.com/standards-lab/sqlate/sqltest"
 
 	"github.com/JaimeStill/capstone-mikoshi/data"
+	"github.com/JaimeStill/capstone-mikoshi/domain/contexts"
 	"github.com/JaimeStill/capstone-mikoshi/domain/items"
 )
 
@@ -60,7 +61,7 @@ func service(t *testing.T, responses ...sqltest.Response) fixture {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = objects.Shutdown(context.Background()) })
-	return fixture{service: items.New(db, objects), rec: rec, fake: fake}
+	return fixture{service: items.New(db, objects, contexts.New(db)), rec: rec, fake: fake}
 }
 
 func digest(content []byte) string {
@@ -513,6 +514,118 @@ func TestService_FindRefusals(t *testing.T) {
 	}
 }
 
+const contextID = "0190a5d1-7a2b-7c3d-8e4f-0000000000c1"
+
+func contextRow(kind contexts.Kind) sqltest.Response {
+	var filter driver.Value
+	if kind == contexts.KindQuery {
+		filter = []byte(`[{"field":"route","op":"eq","value":"text"}]`)
+	}
+	return sqltest.Response{
+		Columns: []string{"id", "parent_id", "name", "kind", "filter", "created_at"},
+		Rows:    [][]driver.Value{{contextID, contexts.Root, "c", string(kind), filter, time.Date(2026, 11, 27, 12, 0, 0, 0, time.UTC)}},
+	}
+}
+
+func foreignKey(constraint string) sqltest.Response {
+	return sqltest.Response{Err: &sqlate.ConstraintError{Constraint: constraint, Class: sqlate.ErrForeignKeyViolation, Err: errors.New("missing")}}
+}
+
+func TestService_PlaceReadsTheContextThenInsertsTheReference(t *testing.T) {
+	f := service(t, contextRow(contexts.KindExplicit), affected(1))
+	if err := f.service.Place(t.Context(), contextID, itemID); err != nil {
+		t.Fatal(err)
+	}
+	sameOps(t, f.rec, q, x)
+	if find := f.rec.Calls()[0]; !strings.HasSuffix(find.SQL, "FROM context WHERE id = CAST($1 AS uuid)") || find.Args[0] != contextID {
+		t.Errorf("context read = %+v", find)
+	}
+	insert := callsTo(f.rec, "INSERT INTO context_item")
+	if len(insert) != 1 || insert[0].Args[0] != contextID || insert[0].Args[1] != itemID {
+		t.Errorf("reference insert = %+v, want the context and the item", insert)
+	}
+}
+
+func TestService_PlaceRepeatedChangesNothing(t *testing.T) {
+	f := service(t, contextRow(contexts.KindExplicit), violation("pk_context_item"))
+	if err := f.service.Place(t.Context(), contextID, itemID); err != nil {
+		t.Errorf("Place = %v, want the reference left in place", err)
+	}
+}
+
+func TestService_PlaceRefusals(t *testing.T) {
+	cases := []struct {
+		name      string
+		contextID string
+		itemID    string
+		responses []sqltest.Response
+		want      error
+		ops       []sqltest.Op
+	}{
+		{"a malformed context id", "x", itemID, nil, items.ErrValidation, nil},
+		{"a malformed item id", contextID, "x", nil, items.ErrValidation, nil},
+		{"an unknown context", contextID, itemID, []sqltest.Response{none()}, items.ErrContextNotFound, []sqltest.Op{q}},
+		{"a query context", contextID, itemID, []sqltest.Response{contextRow(contexts.KindQuery)}, items.ErrQueryContext, []sqltest.Op{q}},
+		{"an unknown item", contextID, itemID, []sqltest.Response{contextRow(contexts.KindExplicit), foreignKey("fk_context_item_item")}, items.ErrItemNotFound, []sqltest.Op{q, x}},
+		{"a context deleted after its read", contextID, itemID, []sqltest.Response{contextRow(contexts.KindExplicit), foreignKey("fk_context_item_context")}, items.ErrContextNotFound, []sqltest.Op{q, x}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f := service(t, c.responses...)
+			if err := f.service.Place(t.Context(), c.contextID, c.itemID); !errors.Is(err, c.want) {
+				t.Errorf("Place = %v, want %v", err, c.want)
+			}
+			sameOps(t, f.rec, c.ops...)
+		})
+	}
+}
+
+func TestService_WithdrawDeletesTheReference(t *testing.T) {
+	f := service(t, contextRow(contexts.KindExplicit), affected(1))
+	if err := f.service.Withdraw(t.Context(), contextID, itemID); err != nil {
+		t.Fatal(err)
+	}
+	sameOps(t, f.rec, q, x)
+	del := callsTo(f.rec, "DELETE FROM context_item")
+	if len(del) != 1 || del[0].Args[0] != contextID || del[0].Args[1] != itemID {
+		t.Errorf("reference delete = %+v, want the context and the item", del)
+	}
+}
+
+func TestService_WithdrawAnAbsentReferenceChangesNothing(t *testing.T) {
+	f := service(t, contextRow(contexts.KindExplicit), affected(0), itemRow(pdf, "document", "pdf"))
+	if err := f.service.Withdraw(t.Context(), contextID, itemID); err != nil {
+		t.Errorf("Withdraw = %v, want the reference left absent", err)
+	}
+	sameOps(t, f.rec, q, x, q)
+}
+
+func TestService_WithdrawRefusals(t *testing.T) {
+	cases := []struct {
+		name      string
+		contextID string
+		itemID    string
+		responses []sqltest.Response
+		want      error
+		ops       []sqltest.Op
+	}{
+		{"a malformed context id", "x", itemID, nil, items.ErrValidation, nil},
+		{"a malformed item id", contextID, "x", nil, items.ErrValidation, nil},
+		{"an unknown context", contextID, itemID, []sqltest.Response{none()}, items.ErrContextNotFound, []sqltest.Op{q}},
+		{"a query context", contextID, itemID, []sqltest.Response{contextRow(contexts.KindQuery)}, items.ErrQueryContext, []sqltest.Op{q}},
+		{"an unknown item", contextID, itemID, []sqltest.Response{contextRow(contexts.KindExplicit), affected(0), none()}, items.ErrItemNotFound, []sqltest.Op{q, x, q}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f := service(t, c.responses...)
+			if err := f.service.Withdraw(t.Context(), c.contextID, c.itemID); !errors.Is(err, c.want) {
+				t.Errorf("Withdraw = %v, want %v", err, c.want)
+			}
+			sameOps(t, f.rec, c.ops...)
+		})
+	}
+}
+
 func page(ids ...string) sqltest.Response {
 	r := sqltest.Response{Columns: itemColumns}
 	for _, id := range ids {
@@ -577,7 +690,7 @@ func TestStore_RegistersAndVerifiesEveryStatement(t *testing.T) {
 		cfg := storage.Config{Container: "items"}
 		_ = cfg.Finalize("")
 		return cfg
-	}()))
+	}()), contexts.New(db))
 
 	var entry *query.Statements
 	for _, e := range db.Registry() {

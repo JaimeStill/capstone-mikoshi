@@ -131,9 +131,11 @@
 // logger for its error writer (web.NewErrorWriter(logger, ...)). Mikoshi's
 // domain layers are contexts, the context tree, built over the sql node
 // and mounted at /api/contexts; uploads, the resumable uploads in
-// progress, built over the sql node; and items, built over the sql node
-// and the storage node and mounted at /api/items, each read with the read
-// limits allowing a cursor. go-web-sdk's draft-16 upload handler mounts at
+// progress, built over the sql node; and items, built over the sql node,
+// the storage node, and the contexts node and mounted at /api/items, each
+// read with the read limits allowing a cursor. The items layer's reference
+// group mounts at /api/contexts beside the contexts layer's group, its
+// routes under /api/contexts/{id}/items/{item}. go-web-sdk's draft-16 upload handler mounts at
 // /api/uploads, on the client's origin and so with no CORS, over the
 // uploads service, with the lifetime and max-append-size of the
 // configuration's uploads block, the max-append-size as the limit of the
