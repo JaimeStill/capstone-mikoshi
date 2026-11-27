@@ -74,6 +74,12 @@ The Go package compiles only once `dist/` is built; `dist/` is never committed.
 - Prettier formats the code, the JSON, and the CSS alone; its default run would also rewrite the
   Markdown, the YAML, and `pnpm-lock.yaml`.
 - The lint requires a description on every ESLint and TypeScript directive.
+- `src/` has three layers, which eslint-plugin-boundaries holds to one direction: `src/components/`,
+  elements bound for web-components, imports only itself, lit, marked, the foundation, and the
+  icons; `src/sdk/`, stateful client services bound for web-app-sdk, imports only itself; and the
+  app, the rest of `src/`, imports itself, both layers, and the declared dependencies.
+  `eslint.config.js`'s `layers` is the table, and `test/unit/layers.test.ts` lints a tree of
+  forbidden and allowed imports to prove it.
 - Chrome for Testing publishes no checksums: a chrome-headless-shell bump takes each platform's
   sha256 and size from its download by hand. mise caches downloads by checksum, so a bump that
   keeps the old sha256 installs the old build; the browser tier refuses a binary whose version
