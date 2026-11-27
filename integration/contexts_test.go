@@ -641,3 +641,205 @@ func TestContexts_OpposingMovesCommitOne(t *testing.T) {
 		t.Errorf("the walk from the root reaches %d of %d contexts, want every one: a move made a cycle", len(reached), rows)
 	}
 }
+
+func descendants(t *testing.T, p web.Problem) int64 {
+	t.Helper()
+	if p.Detail != contexts.ErrUnconfirmed.Error() {
+		t.Errorf("detail = %q, want %q", p.Detail, contexts.ErrUnconfirmed.Error())
+	}
+	n, ok := p.Extras["descendants"].(float64)
+	if !ok {
+		t.Fatalf("extras = %v, want a numeric descendants member", p.Extras)
+	}
+	return int64(n)
+}
+
+func gone(t *testing.T, c *webtest.Client, ids ...string) {
+	t.Helper()
+	for _, id := range ids {
+		path := "/api/contexts/" + id
+		if p := c.Get(t, path).Problem(t, http.StatusNotFound); p.Instance != path {
+			t.Errorf("instance = %q, want %s", p.Instance, path)
+		}
+	}
+}
+
+func present(t *testing.T, c *webtest.Client, ids ...string) {
+	t.Helper()
+	for _, id := range ids {
+		c.Get(t, "/api/contexts/"+id).Expect(t, http.StatusOK)
+	}
+}
+
+func TestContexts_DeleteALeafOnTheFirstRequest(t *testing.T) {
+	c := integration.Start(t, integration.Options{}).Client()
+
+	folder := createContext(t, c, explicit(contexts.Root, "folder"))
+	leaf := createContext(t, c, explicit(folder.ID, "leaf"))
+	saved := createContext(t, c, queryContext(folder.ID, "saved", `[{"field":"a","op":"null"}]`))
+	kept := createContext(t, c, explicit(folder.ID, "kept"))
+
+	if res := c.Delete(t, "/api/contexts/"+leaf.ID).Expect(t, http.StatusNoContent); len(res.Body) != 0 {
+		t.Errorf("body = %s, want none", res.Body)
+	}
+	c.Delete(t, "/api/contexts/"+saved.ID+"?confirm=0").Expect(t, http.StatusNoContent)
+	gone(t, c, leaf.ID, saved.ID)
+	if got := names(childPage(t, c, "/api/contexts/"+folder.ID+"/children").Items); !slices.Equal(got, []string{"kept"}) {
+		t.Errorf("children = %v, want [kept]", got)
+	}
+
+	if n := descendants(t, c.Delete(t, "/api/contexts/"+kept.ID+"?confirm=2").Problem(t, http.StatusConflict)); n != 0 {
+		t.Errorf("descendants = %d, want 0 for a leaf", n)
+	}
+	present(t, c, kept.ID)
+}
+
+func TestContexts_DeleteASubtreeOnConfirmation(t *testing.T) {
+	c := integration.Start(t, integration.Options{}).Client()
+
+	folder := createContext(t, c, explicit(contexts.Root, "folder"))
+	child := createContext(t, c, explicit(folder.ID, "child"))
+	saved := createContext(t, c, queryContext(folder.ID, "saved", `[{"field":"a","op":"null"}]`))
+	grandchild := createContext(t, c, explicit(child.ID, "grandchild"))
+	deep := createContext(t, c, explicit(grandchild.ID, "deep"))
+	sibling := createContext(t, c, explicit(contexts.Root, "sibling"))
+	all := []string{folder.ID, child.ID, saved.ID, grandchild.ID, deep.ID}
+	path := "/api/contexts/" + folder.ID
+
+	for _, query := range []string{"", "?confirm=0", "?confirm=3", "?confirm=5"} {
+		p := c.Delete(t, path+query).Problem(t, http.StatusConflict)
+		if n := descendants(t, p); n != 4 {
+			t.Errorf("%q: descendants = %d, want 4", query, n)
+		}
+		if p.Instance != path {
+			t.Errorf("instance = %q, want %s", p.Instance, path)
+		}
+	}
+	present(t, c, all...)
+
+	c.Delete(t, path+"?confirm=4").Expect(t, http.StatusNoContent)
+	gone(t, c, all...)
+	present(t, c, sibling.ID)
+	if got := names(childPage(t, c, "/api/contexts/"+contexts.Root+"/children").Items); !slices.Equal(got, []string{"sibling"}) {
+		t.Errorf("children of the root = %v, want [sibling]", got)
+	}
+}
+
+func TestContexts_DeleteWithAStaleCountConflicts(t *testing.T) {
+	c := integration.Start(t, integration.Options{}).Client()
+
+	folder := createContext(t, c, explicit(contexts.Root, "folder"))
+	child := createContext(t, c, explicit(folder.ID, "child"))
+	path := "/api/contexts/" + folder.ID
+
+	if n := descendants(t, c.Delete(t, path).Problem(t, http.StatusConflict)); n != 1 {
+		t.Fatalf("descendants = %d, want 1", n)
+	}
+	added := createContext(t, c, explicit(child.ID, "added"))
+	if n := descendants(t, c.Delete(t, path+"?confirm=1").Problem(t, http.StatusConflict)); n != 2 {
+		t.Errorf("descendants after the addition = %d, want 2", n)
+	}
+	present(t, c, folder.ID, child.ID, added.ID)
+
+	c.Delete(t, path+"?confirm=2").Expect(t, http.StatusNoContent)
+	gone(t, c, folder.ID, child.ID, added.ID)
+}
+
+func TestContexts_DeleteRefusals(t *testing.T) {
+	c := integration.Start(t, integration.Options{}).Client()
+
+	child := createContext(t, c, explicit(contexts.Root, "child"))
+	path := "/api/contexts/" + child.ID
+
+	for _, query := range []string{"", "?confirm=0", "?confirm=1"} {
+		if p := c.Delete(t, "/api/contexts/"+contexts.Root+query).Problem(t, http.StatusConflict); p.Detail != contexts.ErrRootFixed.Error() {
+			t.Errorf("root%s: detail = %q, want %q", query, p.Detail, contexts.ErrRootFixed.Error())
+		}
+	}
+	unknown := "/api/contexts/" + uuid.NewV7().String()
+	if p := c.Delete(t, unknown).Problem(t, http.StatusNotFound); p.Instance != unknown {
+		t.Errorf("instance = %q, want %s", p.Instance, unknown)
+	}
+	if p := c.Delete(t, "/api/contexts/not-a-uuid").Problem(t, http.StatusBadRequest); !strings.Contains(p.Detail, "not-a-uuid") {
+		t.Errorf("detail = %q, want the malformed id named", p.Detail)
+	}
+	for _, query := range []string{"?confirm=", "?confirm=-1", "?confirm=%2B1", "?confirm=x", "?confirm=1.5", "?confirm=0&confirm=0", "?confirm=99999999999999999999"} {
+		if p := c.Delete(t, path+query).Problem(t, http.StatusBadRequest); !strings.Contains(p.Detail, "confirm must be one non-negative integer") {
+			t.Errorf("%s: detail = %q, want the malformed confirm named", query, p.Detail)
+		}
+	}
+	present(t, c, contexts.Root, child.ID)
+}
+
+func TestContexts_DeleteRacingAMoveCommitsOne(t *testing.T) {
+	s, db, _ := domainService(t)
+	ctx := t.Context()
+
+	create := func(parent, name string) string {
+		t.Helper()
+		c, err := s.Create(ctx, contexts.CreateContext{ParentID: parent, Name: name, Kind: contexts.KindExplicit})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c.ID
+	}
+
+	const trees = 100
+	for i := range trees {
+		doomed := create(contexts.Root, fmt.Sprintf("doomed%d", i))
+		inside := create(doomed, fmt.Sprintf("inside%d", i))
+		outside := create(contexts.Root, fmt.Sprintf("outside%d", i))
+		into := i%2 == 0
+		moved, to := outside, doomed
+		if !into {
+			moved, to = inside, contexts.Root
+		}
+
+		start := make(chan struct{})
+		var deleteErr, moveErr error
+		var wg sync.WaitGroup
+		wg.Go(func() {
+			<-start
+			deleteErr = s.Delete(ctx, doomed, 1)
+		})
+		wg.Go(func() {
+			<-start
+			_, moveErr = s.Move(ctx, moved, contexts.MoveContext{ParentID: to})
+		})
+		close(start)
+		wg.Wait()
+
+		d, conflicted := errors.AsType[*contexts.DescendantsError](deleteErr)
+		switch {
+		case deleteErr == nil && into && errors.Is(moveErr, contexts.ErrParentNotFound):
+		case deleteErr == nil && !into && errors.Is(moveErr, sql.ErrNoRows):
+		case conflicted && moveErr == nil && into && d.Count == 2:
+		case conflicted && moveErr == nil && !into && d.Count == 0:
+		default:
+			t.Errorf("tree %d (move into %v): delete = %v, move = %v; want the delete committed and the move refused, or the move committed and the delete conflicting with the new count", i, into, deleteErr, moveErr)
+			continue
+		}
+
+		var remaining int
+		if err := db.Pool.QueryRowContext(ctx, `SELECT COUNT(*) FROM context WHERE id IN ($1, $2, $3)`, doomed, inside, outside).Scan(&remaining); err != nil {
+			t.Fatal(err)
+		}
+		if want := map[bool]int{true: 1, false: 3}[deleteErr == nil]; remaining != want {
+			t.Errorf("tree %d: %d of the tree's 3 contexts remain, want %d", i, remaining, want)
+		}
+	}
+
+	var rows, orphans int
+	if err := db.Pool.QueryRowContext(ctx, `SELECT COUNT(*) FROM context`).Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Pool.QueryRowContext(ctx, `SELECT COUNT(*) FROM context c WHERE c.parent_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM context p WHERE p.id = c.parent_id)`).Scan(&orphans); err != nil {
+		t.Fatal(err)
+	}
+	if orphans != 0 {
+		t.Errorf("%d contexts name a missing parent, want none", orphans)
+	}
+	if reached := subtree(t, s, contexts.Root); len(reached) != rows {
+		t.Errorf("the walk from the root reaches %d of %d contexts, want every one", len(reached), rows)
+	}
+}

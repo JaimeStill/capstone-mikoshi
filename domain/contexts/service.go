@@ -111,3 +111,24 @@ func (s *Service) Subtree(ctx context.Context, id string) ([]Node, error) {
 	}
 	return s.store.resolveSubtree(ctx, id)
 }
+
+// Delete removes the context with the given id and its whole subtree when
+// confirm is the number of its descendants, the context itself excluded:
+// zero, a leaf's count, needs no confirmation from the caller. In one
+// transaction it takes the tree lock, counts the descendants, and deletes
+// the subtree in one statement. A malformed id or a negative confirm is
+// ErrValidation, the root ErrRootFixed, an unknown context sql.ErrNoRows,
+// and a confirm that is not the count a *DescendantsError carrying it.
+func (s *Service) Delete(ctx context.Context, id string, confirm int64) error {
+	parsed, err := uuid.Parse(id)
+	if err != nil {
+		return fmt.Errorf("%w: id must be a UUID", ErrValidation)
+	}
+	if confirm < 0 {
+		return fmt.Errorf("%w: confirm must be a non-negative integer", ErrValidation)
+	}
+	if parsed.String() == Root {
+		return ErrRootFixed
+	}
+	return s.store.remove(ctx, parsed.String(), confirm)
+}

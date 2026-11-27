@@ -28,6 +28,8 @@ type store struct {
 	move      query.Returning[Context]
 	subtree   query.Rows[Node]
 	inSubtree query.Rows[int64]
+	size      query.Rows[int64]
+	delete    query.Statement
 }
 
 func newStore(db *data.Database) *store {
@@ -42,6 +44,8 @@ func newStore(db *data.Database) *store {
 		move:      stmts.Statement("move").Returning(scan),
 		subtree:   stmts.Statement("subtree").Scan(query.Scanner[Node]()),
 		inSubtree: stmts.Statement("in_subtree").Scan(query.Scalar[int64]),
+		size:      stmts.Statement("subtree_size").Scan(query.Scalar[int64]),
+		delete:    stmts.Statement("delete"),
 	}
 }
 
@@ -166,4 +170,24 @@ func (s *store) relocate(ctx context.Context, id string, m MoveContext) (Context
 		}
 		return updated, err
 	}, nil)
+}
+
+func (s *store) remove(ctx context.Context, id string, confirm int64) error {
+	_, err := s.db.Transact(ctx, func(tx *sqlate.Tx) (int64, error) {
+		if err := s.db.Lock(ctx, tx, data.LockContextTree); err != nil {
+			return 0, err
+		}
+		n, err := s.size.One(ctx, tx, query.Args{"id": id})
+		if err != nil {
+			return 0, err
+		}
+		if n == 0 {
+			return 0, sql.ErrNoRows
+		}
+		if descendants := n - 1; descendants != confirm {
+			return 0, &DescendantsError{Count: descendants}
+		}
+		return s.delete.Exec(ctx, tx, query.Args{"id": id})
+	}, nil)
+	return err
 }

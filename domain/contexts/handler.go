@@ -3,8 +3,10 @@ package contexts
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
+	"strconv"
 
 	"github.com/standards-lab/go-database"
 	"github.com/standards-lab/go-web-sdk"
@@ -21,12 +23,16 @@ type handler struct {
 
 // Routes builds the layer's route group, /contexts: the create, the read
 // by id, the read of a context's children, paged under limits, the
-// rename, a PUT of the context's name, and the move, a POST that sets the
-// context's parent and, optionally, its name. logger records the cause of every
-// 5xx the group's error writer sends. Every refusal is a problem response:
-// invalid input or a cursor the read did not issue a 400, an unknown
-// context or parent a 404, and a sibling's name, a query parent, a rename
-// or move of the root, or a move into the context's own subtree a 409; an
+// rename, a PUT of the context's name, the move, a POST that sets the
+// context's parent and, optionally, its name, and the delete, which
+// removes the context's subtree and answers 204 when its confirm query
+// parameter, absent for zero, is the number of the context's descendants.
+// logger records the cause of every 5xx the group's error writer sends.
+// Every refusal is a problem response: invalid input or a cursor the read
+// did not issue a 400, an unknown context or parent a 404, and a sibling's
+// name, a query parent, a rename, move, or delete of the root, a move into
+// the context's own subtree, or a delete whose confirm is not the count a
+// 409, the last carrying the count as its descendants member; an
 // unreachable database is a 503.
 func Routes(service *Service, limits web.Limits, logger *slog.Logger) *web.Group {
 	h := &handler{service: service, limits: limits}
@@ -37,6 +43,7 @@ func Routes(service *Service, limits web.Limits, logger *slog.Logger) *web.Group
 	g.HandleErr("GET", "/{id}/children", h.children)
 	g.HandleErr("PUT", "/{id}", h.rename)
 	g.HandleErr("POST", "/{id}/move", h.move)
+	g.HandleErr("DELETE", "/{id}", h.delete)
 	return g
 }
 
@@ -113,7 +120,39 @@ func (h *handler) move(w http.ResponseWriter, r *http.Request) error {
 	return web.WriteJSON(w, http.StatusOK, c)
 }
 
+func (h *handler) delete(w http.ResponseWriter, r *http.Request) error {
+	id, err := web.PathUUID(r, "id")
+	if err != nil {
+		return err
+	}
+	confirm, err := confirmation(r)
+	if err != nil {
+		return err
+	}
+	if err := h.service.Delete(r.Context(), id, confirm); err != nil {
+		return err
+	}
+	w.WriteHeader(http.StatusNoContent)
+	return nil
+}
+
+func confirmation(r *http.Request) (int64, error) {
+	values, ok := r.URL.Query()["confirm"]
+	if !ok {
+		return 0, nil
+	}
+	if len(values) == 1 {
+		if n, err := strconv.ParseUint(values[0], 10, 63); err == nil {
+			return int64(n), nil
+		}
+	}
+	return 0, fmt.Errorf("%w: confirm must be one non-negative integer, not %q", ErrValidation, values)
+}
+
 func status(err error) (web.Problem, bool) {
+	if d, ok := errors.AsType[*DescendantsError](err); ok {
+		return web.Problem{Status: http.StatusConflict, Detail: ErrUnconfirmed.Error(), Extras: map[string]any{"descendants": d.Count}}, true
+	}
 	switch {
 	case errors.Is(err, ErrValidation), errors.Is(err, query.ErrDirectives):
 		return web.Problem{Status: http.StatusBadRequest}, true

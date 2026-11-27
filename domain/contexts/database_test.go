@@ -430,3 +430,67 @@ func TestService_SubtreeRefusals(t *testing.T) {
 		t.Errorf("Subtree = %v, want sql.ErrNoRows", err)
 	}
 }
+
+func TestService_DeleteLocksCountsThenDeletesTheSubtree(t *testing.T) {
+	s, rec := service(t, treeLocked(), count(4), sqltest.Response{Affected: 4})
+	if err := s.Delete(context.Background(), childID, 3); err != nil {
+		t.Fatal(err)
+	}
+	sameOps(t, rec, begin, x, q, x, commit)
+	calls := rec.Calls()
+	if lock := calls[1]; lock.SQL != "SELECT pg_advisory_xact_lock(hashtext($1))" || lock.Args[0] != data.LockContextTree {
+		t.Errorf("delete did not take the tree lock first: %+v", lock)
+	}
+	if walk := calls[2]; !strings.HasPrefix(walk.SQL, "WITH RECURSIVE down") || !strings.HasSuffix(walk.SQL, "SELECT COUNT(*) FROM down") || walk.Args[0] != childID {
+		t.Errorf("count = %+v, want the descendant walk counted", walk)
+	}
+	del := calls[3]
+	if !strings.HasPrefix(del.SQL, "WITH RECURSIVE down") || !strings.HasSuffix(del.SQL, "DELETE FROM context WHERE id IN (SELECT id FROM down)") || del.Args[0] != childID {
+		t.Errorf("delete = %+v, want the subtree deleted in one statement", del)
+	}
+}
+
+func TestService_DeleteALeafNeedsNoConfirmation(t *testing.T) {
+	s, rec := service(t, treeLocked(), count(1), sqltest.Response{Affected: 1})
+	if err := s.Delete(context.Background(), childID, 0); err != nil {
+		t.Fatal(err)
+	}
+	sameOps(t, rec, begin, x, q, x, commit)
+}
+
+func TestService_DeleteRefusals(t *testing.T) {
+	cases := []struct {
+		name        string
+		id          string
+		confirm     int64
+		responses   []sqltest.Response
+		want        error
+		descendants int64
+		ops         []sqltest.Op
+	}{
+		{"a malformed id", "x", 0, nil, contexts.ErrValidation, -1, nil},
+		{"a negative confirm", childID, -1, nil, contexts.ErrValidation, -1, nil},
+		{"the root", contexts.Root, 0, nil, contexts.ErrRootFixed, -1, nil},
+		{"the root in another spelling", "{" + contexts.Root + "}", 0, nil, contexts.ErrRootFixed, -1, nil},
+		{"an unknown context", childID, 0, []sqltest.Response{treeLocked(), count(0)}, sql.ErrNoRows, -1, []sqltest.Op{begin, x, q, rollback}},
+		{"descendants unconfirmed", childID, 0, []sqltest.Response{treeLocked(), count(4)}, contexts.ErrUnconfirmed, 3, []sqltest.Op{begin, x, q, rollback}},
+		{"a stale count", childID, 2, []sqltest.Response{treeLocked(), count(4)}, contexts.ErrUnconfirmed, 3, []sqltest.Op{begin, x, q, rollback}},
+		{"a confirm on a leaf", childID, 2, []sqltest.Response{treeLocked(), count(1)}, contexts.ErrUnconfirmed, 0, []sqltest.Op{begin, x, q, rollback}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			s, rec := service(t, c.responses...)
+			err := s.Delete(context.Background(), c.id, c.confirm)
+			if !errors.Is(err, c.want) {
+				t.Errorf("Delete = %v, want %v", err, c.want)
+			}
+			if c.descendants >= 0 {
+				d, ok := errors.AsType[*contexts.DescendantsError](err)
+				if !ok || d.Count != c.descendants {
+					t.Errorf("Delete = %#v, want a DescendantsError counting %d", err, c.descendants)
+				}
+			}
+			sameOps(t, rec, c.ops...)
+		})
+	}
+}

@@ -1,6 +1,9 @@
 package contexts
 
-import "errors"
+import (
+	"errors"
+	"fmt"
+)
 
 var (
 	// ErrValidation classifies a refused input: a malformed id, name,
@@ -20,11 +23,32 @@ var (
 	// which is a leaf, a 409.
 	ErrQueryParent = errors.New("a query context is a leaf; no context is placed under one")
 
-	// ErrRootFixed reports a rename or a move of the root, whose name and
-	// place are fixed, a 409.
-	ErrRootFixed = errors.New("the root context is fixed; it is not renamed or moved")
+	// ErrRootFixed reports a rename, a move, or a delete of the root, whose
+	// name and place are fixed, a 409.
+	ErrRootFixed = errors.New("the root context is fixed; it is not renamed, moved, or deleted")
 
 	// ErrCycle reports a move under the context itself or one of its
 	// descendants, a 409.
 	ErrCycle = errors.New("a context is not moved into its own subtree")
+
+	// ErrUnconfirmed reports a delete whose confirmation does not match
+	// the number of the context's descendants, a 409 carrying the count. A
+	// [DescendantsError] unwraps to it.
+	ErrUnconfirmed = errors.New("the delete's confirmation does not match the context's descendants; repeat it with confirm set to their count")
 )
+
+// DescendantsError reports a delete refused because its confirmation does
+// not match Count, the number of the context's descendants, the context
+// itself excluded, as the delete counted them under the tree lock. It
+// unwraps to [ErrUnconfirmed].
+type DescendantsError struct {
+	Count int64
+}
+
+// Error names the count the confirmation must carry.
+func (e *DescendantsError) Error() string {
+	return fmt.Sprintf("%v: the context has %d descendants", ErrUnconfirmed, e.Count)
+}
+
+// Unwrap returns [ErrUnconfirmed].
+func (e *DescendantsError) Unwrap() error { return ErrUnconfirmed }
