@@ -9,7 +9,7 @@
 1. [x] web-shell
 2. [x] store
 3. [x] contexts
-4. [ ] upload
+4. [x] upload
 5. [ ] browser-upload
 6. [ ] items
 7. [ ] sse-codec
@@ -25,6 +25,7 @@
 17. [ ] event-relay
 18. [ ] signal-flow
 19. [ ] image
+
 
 ## Decisions
 
@@ -47,12 +48,20 @@
 - store: the schema check caches its readiness for a few seconds, so `/readyz` trails an out-of-band schema change by that long.
 - items: plan blob reclamation, and reclamation of orphaned content-keyed sources (their chunks and embeddings), on go-database's sweeper as go-web-service's `FilesReclaimer` does (agreed at contexts' brief).
 - context-tools: consider a context-bound sub-agent for one-off wider analyses: a tool starts a sub-agent bound to a given context (the root included), whose cited answer is recorded with that boundary in its provenance; settle its approval, budgets, and process model there. Input for `spike-go-harness`.
+- upload: Bunrei's (`state`/`api`) and Mikoshi's (`items`) cross-replica stores are their own, proven with `uploadtest`, and arbitrate appends by a conditional commit on the expected offset. Rejected: a lock or lease per upload (a hung request blocks resumption until it times out, draft §10); a shared store now (Bunrei keeps upload state on JetStream, Mikoshi in PostgreSQL, with different retention, and no existing repository may hold one under the dependency rules), which `upload-store-graduation` revisits.
+- upload: Bunrei's and `items`' Complete functions are idempotent on the upload ID, because overlapping completing requests can each call one. Rejected: a store claim operation (it changes the approved `Store` interface).
+- upload: `browser-upload` tests web-app-sdk's client against the handler as the second implementation, and its draft pin mirrors `upload.DraftRevision` (16) and `upload.InteropVersion` (11). Rejected: tusd as an interop peer (v2.10.4 speaks interop versions 3–6 only).
 
 ## Pending edits
 
-- coordinator · context/web-client.md (the backlog entry's summary is at its budget): add webappgen findings from web-shell's inject: when the base is `/`, `mountClient` emits both the `/` not-found branch and the `Mount` branch and a dead `strings` import; inject doesn't add `client.go` to the composition root's `doc.go` layer list; the `# Written by webappgen` header its integration test requires conflicts with comments.md; the browser tier's `ENTRY` and `RENDER_BLOCKING` constants aren't tied to the Go package's `Entry` and `RenderBlocking`; the service's check builds the client twice, and ci.yml's check job builds it again; the root `currency` doesn't run the client's (`mise -C web run currency`), so the client's pins fall behind unreported.
-- coordinator · context/web-client.md: add a go-web-sdk-template finding: the template ships the older 84-line `scripts/currency.sh`, without the Dockerfile scans or HOLDS; sqlate's and go-database's shared script is current.
+- coordinator · context/web-client.md (the backlog entry's summary is at its budget): add webappgen findings from web-shell's inject: when the base is `/`, `mountClient` emits both the `/` not-found branch and the `Mount` branch and a dead `strings` import; inject doesn't add `client.go` to the composition root's `doc.go` layer list; the `# Written by webappgen` header its integration test requires conflicts with comments.md; the browser tier's `ENTRY` and `RENDER_BLOCKING` constants aren't tied to the Go package's `Entry` and `RenderBlocking`; the service's check builds the client twice, and ci.yml's check job builds it again; the root `currency` doesn't run the client's (`mise -C web run currency`), so the client's pins fall behind unreported. Add a go-web-sdk-template finding too: the template ships the older 84-line `scripts/currency.sh`, without the Dockerfile scans or HOLDS; sqlate's and go-database's shared script is current; go-web-sdk also runs the older 80-line script.
 - coordinator · retro topic: settle how a document references another repository's document. lint-references can't resolve `context/chunks.md` in capstone-data-intelligence, so Mikoshi's migration headers link it by GitHub URL.
 - coordinator · roadmap/context-tree-graduation.toml: add `context = ["capstone-mikoshi/docs/contexts.md"]`, the tree's design, including the native tree lock that the library replaces with blobfs's standard-tier fallback.
 - coordinator · retro topic: go-database's admin service checks statements in `Verify` only through a `Seeder`, so a service with statements and no seed states can't have `POST /admin/database/schema/verify` check them. Mikoshi checks its statements at startup instead (`data.Database.Verify`, docs/admin.md).
-- capstone-data-intelligence · context/upload.md, context/protocol.md, and the foundation record's protocol Decision: name `.mikoshi` `upload` where they name `.bunrei` `upload`.
+- capstone-data-intelligence · context/upload.md, context/protocol.md, and the foundation record's protocol Decision: name `.mikoshi` `upload` where they name `.bunrei` `upload`; the upload releases alone as go-web-sdk v0.19.0, `sse-writer` at a later minor; tusd is no interop peer (it speaks interop versions 3–6 only, draft-16 is 11).
+- capstone-data-intelligence · context/upload.md: add one line that appending nothing from an interrupted append departs deliberately from draft §8.2's SHOULD, and that the in-memory store and `uploadtest` are go-web-sdk's while each service's cross-replica store is its own; context/protocol.md: state that Bunrei's chunk store over its blob storage is Bunrei's own, proven by go-web-sdk's `uploadtest`.
+- coordinator · roadmap/capstone.data-intelligence.mikoshi.toml, `upload` summary: replace "tusd as an interop peer only" (tusd lacks interop version 11) and the `ReadUpload` line (the handler reads bodies of unknown length itself).
+- coordinator · roadmap/upload-store-graduation.toml: create the backlog goal (a shared cross-replica chunk store, an adjacent library over sqlate, once Bunrei's and Mikoshi's stores exist); roadmap/index.toml: add it to `backlog`.
+- architecture · standards/go-elemental/principles/construction-and-execution.md: state the exception for an interface that must stay standard-library-only (go-web-sdk's `upload.Store.Create` takes six positional inputs after ctx, since a struct would make implementers import go-web-sdk).
+- architecture · principles/rolling-currency.md: add a specification revision a library implements (pinned in its source, read from its registry such as datatracker) to the versions the principle covers.
+- docproc · context/bunrei.md: repoint `chunked-upload-graduation` at go-web-sdk's draft-16 handler and `upload-store-graduation`; replace the stale upload commands (OpenUpload, AppendChunk, AbortUpload, GetUpload) with CompleteUpload and the draft-16 handler.
