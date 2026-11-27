@@ -91,11 +91,16 @@
 // with Use. Mikoshi's one admin domain is the schema: go-database's admin
 // service over the pool, a sqlate session wrapped in the PostgreSQL
 // dialect, and a migrator over data.Migrations that declares pgvector by
-// name only, with no seeder and no seed state. Its Start installs the
-// version of pgvector the image offers, failing before any migration when
-// the image offers none, then applies the set; its Ready joins the
-// readiness probe under the schema's name, false while a migration or the
-// declaration is pending or mismatched. Its route group, the admin/database
+// name only, with no seeder and no seed state, and the sql node's
+// statements registry as its inventory. The node's value is a [Schema],
+// which Uses every domain node so each has registered its statements
+// before it is built. Its Start installs the version of pgvector the image
+// offers, failing before any migration when the image offers none, then
+// applies the set, then prepares every registered statement against the
+// migrated schema (data.Database.Verify), so a statement that does not fit
+// fails startup with an error naming the schema node and the statement;
+// its Ready joins the readiness probe under the schema's name, false while
+// a migration or the declaration is pending or mismatched. Its route group, the admin/database
 // package's /database, mounts into the /admin group over the schema node
 // and the gate node, so the server reaches the schema through the router.
 // The gate is a fresh go-core reactor.Gate, the process's quiesce gate:

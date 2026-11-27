@@ -307,3 +307,26 @@ func TestSchema_WrongDimensionInSpaceOneIsRefused(t *testing.T) {
 		t.Errorf("insert of 3 dimensions into space 1 = %v, want an error containing %q", err, want)
 	}
 }
+
+func TestSchema_StatementThatNoLongerFitsFailsStartup(t *testing.T) {
+	db := integration.Database(t)
+	first := integration.Start(t, integration.Options{Database: db})
+	if code := first.Stop(t); code != 0 {
+		t.Fatalf("exit = %d, want 0:\n%s", code, first.Output())
+	}
+	exec(t, db.Pool, "ALTER TABLE context RENAME COLUMN kind TO variety")
+
+	s := integration.Launch(t, integration.Options{Database: db})
+	if code := s.Wait(t); code != 1 {
+		t.Errorf("exit = %d, want 1:\n%s", code, s.Output())
+	}
+	out := s.Output()
+	for _, want := range []string{`msg="service failed"`, "startup: schema", "query: find:", `column \"kind\" does not exist`} {
+		if !strings.Contains(out, want) {
+			t.Errorf("log carries no %s; want startup failed by the schema node naming the statement:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "server ready") {
+		t.Errorf("log = %q, want no ready record", out)
+	}
+}

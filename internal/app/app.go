@@ -11,7 +11,6 @@ import (
 	"github.com/standards-lab/go-core/lifecycle"
 	"github.com/standards-lab/go-core/reactor"
 	"github.com/standards-lab/go-database"
-	"github.com/standards-lab/go-database/admin"
 	"github.com/standards-lab/go-web-sdk"
 
 	"github.com/JaimeStill/capstone-mikoshi/data"
@@ -52,10 +51,10 @@ type Nodes struct {
 	// Admin (admin.go): the gate is the process's quiesce gate, which the
 	// schema-changing admin verbs hold exclusively; the schema is
 	// go-database's admin service over the pool, which migrates Mikoshi's
-	// set and reconciles its pgvector declaration at startup and reports
-	// the schema's readiness.
+	// set and reconciles its pgvector declaration at startup, then prepares
+	// every registered statement, and reports the schema's readiness.
 	Gate   *graph.Node[*reactor.Gate]
-	Schema *graph.Node[*admin.Service]
+	Schema *graph.Node[*Schema]
 
 	// Domain (domain.go): the contexts service, the context tree.
 	Contexts *graph.Node[*contexts.Service]

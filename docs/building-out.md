@@ -56,11 +56,12 @@ provides. It is a node defined in `defineAdmin` (`internal/app/admin.go`), with 
 mounted under `/admin` in `mountAdmin`. One that verifies and corrects the state of the
 infrastructure it administers is a lifecycle participant by its methods, and the domains that
 depend on that state `Use` it, so it starts ahead of them. The schema node is the first admin
-service: it migrates at startup, joins `/readyz`, and its route group serves `/admin/database`
-([Admin](admin.md)). The admin mount is a route group separate from `/api`, and its
-schema-changing verbs hold the quiesce gate. Its isolation is unsettled: it serves on the API
-listener without authentication or audit, so it is not for a public deployment until a
-management listener gives it a listener of its own.
+service: it migrates at startup, then prepares every statement the domains registered on the
+`sql` node, joins `/readyz`, and its route group serves `/admin/database` ([Admin](admin.md)).
+The admin mount is a route group separate from `/api`, and its schema-changing verbs hold the
+quiesce gate. Its isolation is unsettled: it serves on the API listener without authentication or
+audit, so it is not for a public deployment until a management listener gives it a listener of
+its own.
 
 A reactor is an entry point that runs for the process lifetime, driven by an occurrence (a
 subscription, an interval, a wake on demand) rather than a caller. Each is a node defined in

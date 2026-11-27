@@ -284,3 +284,16 @@ func TestRun_BuildFailureExitsOne(t *testing.T) {
 		t.Errorf("log = %q, want nothing logged", got)
 	}
 }
+
+func TestGraph_SchemaListsEveryRegisteredInventory(t *testing.T) {
+	a := app.New(configtest.Config(t), io.Discard)
+	sys := buildAsRun(t, a)
+
+	var got []string
+	for _, d := range sys.Get(a.Nodes().Schema).Statements().Domains {
+		got = append(got, d.Name)
+	}
+	if want := []string{"contexts", "data"}; !slices.Equal(got, want) {
+		t.Errorf("statements registry = %v, want %v", got, want)
+	}
+}

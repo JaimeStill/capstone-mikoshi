@@ -21,6 +21,7 @@ var files embed.FS
 
 type store struct {
 	db        *data.Database
+	stmts     *query.Statements
 	findRows  query.Rows[Context]
 	children  query.Projection[Context]
 	create    query.Returning[Context]
@@ -35,8 +36,9 @@ type store struct {
 func newStore(db *data.Database) *store {
 	stmts := db.Catalog.MustCompile(files, "statements", db.Dialect())
 	scan := query.Scanner[Context]()
-	return &store{
+	s := &store{
 		db:        db,
+		stmts:     stmts,
 		findRows:  stmts.Statement("find").Scan(scan),
 		children:  stmts.Statement("children").Project(scan),
 		create:    stmts.Statement("create").Returning(scan),
@@ -47,6 +49,15 @@ func newStore(db *data.Database) *store {
 		size:      stmts.Statement("subtree_size").Scan(query.Scalar[int64]),
 		delete:    stmts.Statement("delete"),
 	}
+	db.Register("contexts", stmts, s)
+	return s
+}
+
+// Verify prepares every statement and the children projection's field
+// contract against the live schema over sess, making the store a
+// query.Verifier.
+func (s *store) Verify(ctx context.Context, sess sqlate.Session) error {
+	return query.Verify(ctx, sess, s.stmts, s.children)
 }
 
 func (s *store) find(ctx context.Context, sess sqlate.Session, id string) (Context, error) {

@@ -49,3 +49,16 @@ func TestAdmin_DeclaresNoSeedStates(t *testing.T) {
 		t.Errorf("seed detail = %q, want the disabled seed named", p.Detail)
 	}
 }
+
+func TestAdmin_StatementsListEveryRegisteredDomain(t *testing.T) {
+	s := integration.Start(t, integration.Options{})
+
+	inv := webtest.Decode[admin.Inventory](t, s.Client().Get(t, "/admin/database/statements"), http.StatusOK)
+	got := map[string]int{}
+	for _, d := range inv.Domains {
+		got[d.Name] = len(d.Statements)
+	}
+	if got["contexts"] == 0 || got["data"] == 0 || len(got) != 2 {
+		t.Errorf("statements by domain = %v, want contexts' and data's inventories", got)
+	}
+}

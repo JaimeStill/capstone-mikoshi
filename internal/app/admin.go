@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/standards-lab/go-core/graph"
@@ -19,7 +20,25 @@ func defineAdmin(g *graph.Graph, n *Nodes) {
 	n.Schema = g.Define("schema", n.newSchema)
 }
 
-func (n *Nodes) newSchema(s *graph.Scope) (*admin.Service, error) {
+// Schema is the schema node's value: go-database's admin service over the
+// pool, whose Start also prepares every statement registered on the sql
+// node against the schema it has just made current.
+type Schema struct {
+	*admin.Service
+	sql *data.Database
+}
+
+// Start brings the schema to its head through the admin service, then
+// runs data.Database.Verify, so a statement that does not fit the
+// migrated schema fails startup with an error naming it.
+func (s *Schema) Start(ctx context.Context) error {
+	if err := s.Service.Start(ctx); err != nil {
+		return err
+	}
+	return s.sql.Verify(ctx)
+}
+
+func (n *Nodes) newSchema(s *graph.Scope) (*Schema, error) {
 	sql := s.Use(n.SQL)
 	logger := s.Use(n.Logger)
 
@@ -31,13 +50,19 @@ func (n *Nodes) newSchema(s *graph.Scope) (*admin.Service, error) {
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
 
-	return admin.New(s.Use(n.Database), sql.DB, migrator, sql.Catalog, admin.Options{
-		Logger: logger,
-	}), nil
+	s.Use(n.Contexts)
+
+	return &Schema{
+		Service: admin.New(s.Use(n.Database), sql.DB, migrator, sql.Catalog, admin.Options{
+			Registry: sql,
+			Logger:   logger,
+		}),
+		sql: sql,
+	}, nil
 }
 
 func mountAdmin(s *graph.Scope, n *Nodes) *web.Group {
 	g := web.NewGroup("/admin")
-	g.Mount(dbadmin.Routes(s.Use(n.Schema), s.Use(n.Gate), s.Use(n.Logger)))
+	g.Mount(dbadmin.Routes(s.Use(n.Schema).Service, s.Use(n.Gate), s.Use(n.Logger)))
 	return g
 }

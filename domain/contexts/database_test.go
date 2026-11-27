@@ -491,3 +491,50 @@ func TestService_DeleteRefusals(t *testing.T) {
 		})
 	}
 }
+
+func TestStore_RegistersAndVerifiesEveryStatement(t *testing.T) {
+	pool, rec := sqltest.Open(t)
+	db := data.New(sqlate.Wrap(pool, sqltest.ReturningDialect{}), query.MustCatalog(query.Patterns()))
+	contexts.New(db)
+
+	var entry *query.Statements
+	for _, e := range db.Registry() {
+		if e.Name == "contexts" {
+			entry = e.Statements
+		}
+	}
+	if entry == nil {
+		t.Fatalf("registry = %v, want the contexts statements registered", db.Registry())
+	}
+	if err := db.Verify(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	prepared := rec.SQL(sqltest.OpPrepare)
+	registered := []string{}
+	for _, e := range db.Registry() {
+		for _, st := range e.Statements.Statements() {
+			registered = append(registered, st.Text())
+			if !slices.Contains(prepared, st.Text()) {
+				t.Errorf("%s's statement %s was not verified", e.Name, st.Name())
+			}
+		}
+	}
+	probes := slices.DeleteFunc(slices.Clone(prepared), func(sql string) bool {
+		return slices.Contains(registered, sql)
+	})
+	if len(probes) == 0 {
+		t.Error("Verify prepared the registered statements alone; want the children projection's field contract probed")
+	}
+}
+
+func TestNew_TwiceOverOneDatabaseIsAWiringDefect(t *testing.T) {
+	pool, _ := sqltest.Open(t)
+	db := data.New(sqlate.Wrap(pool, sqltest.ReturningDialect{}), query.MustCatalog(query.Patterns()))
+	contexts.New(db)
+	defer func() {
+		if recover() == nil {
+			t.Fatal("a second contexts service registered its statements again")
+		}
+	}()
+	contexts.New(db)
+}
