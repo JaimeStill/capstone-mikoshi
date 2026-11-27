@@ -305,8 +305,9 @@ type PendingReclaimer struct {
 // this one with the error. Pass reports more when it reclaimed budget
 // rows, so a further pass may find more.
 func (r *PendingReclaimer) Pass(ctx context.Context, budget int) (more bool, err error) {
-	n, err := r.store.reclaimPending(ctx, r.staleAge, budget)
-	return err == nil && n >= budget, err
+	return reclaimUpTo(ctx, budget, func(ctx context.Context) (bool, error) {
+		return r.store.reclaimStale(ctx, r.staleAge)
+	})
 }
 
 // OrphanReclaimer returns the orphaned blobs' reclaimer over the service's
@@ -339,6 +340,7 @@ type OrphanReclaimer struct {
 // reports more when it reclaimed budget rows, so a further pass may find
 // more.
 func (r *OrphanReclaimer) Pass(ctx context.Context, budget int) (more bool, err error) {
-	n, err := r.store.reclaimOrphans(ctx, r.staleAge, budget)
-	return err == nil && n >= budget, err
+	return reclaimUpTo(ctx, budget, func(ctx context.Context) (bool, error) {
+		return r.store.reclaimOrphaned(ctx, r.staleAge)
+	})
 }

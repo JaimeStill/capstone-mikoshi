@@ -39,36 +39,36 @@ func (p progressRow) length() int64 {
 }
 
 type store struct {
-	db          *data.Database
-	stmts       *query.Statements
-	create      query.Statement
-	reclaim     query.Statement
-	metaRows    query.Rows[metaRow]
-	progressRow query.Rows[progressRow]
-	setLen      query.Returning[progressRow]
-	advance     query.Returning[progressRow]
-	appendChunk query.Statement
-	chunk       query.Rows[[]byte]
-	delete      query.Statement
-	expired     query.Statement
+	db           *data.Database
+	stmts        *query.Statements
+	create       query.Statement
+	reclaim      query.Statement
+	metaRows     query.Rows[metaRow]
+	progressRows query.Rows[progressRow]
+	setLen       query.Returning[progressRow]
+	advance      query.Returning[progressRow]
+	appendChunk  query.Statement
+	chunk        query.Rows[[]byte]
+	delete       query.Statement
+	expired      query.Statement
 }
 
 func newStore(db *data.Database) *store {
 	stmts := db.Catalog.MustCompile(files, "statements", db.Dialect())
 	scan := query.Scanner[progressRow]()
 	s := &store{
-		db:          db,
-		stmts:       stmts,
-		create:      stmts.Statement("create"),
-		reclaim:     stmts.Statement("reclaim"),
-		metaRows:    stmts.Statement("meta").Scan(query.Scanner[metaRow]()),
-		progressRow: stmts.Statement("progress").Scan(scan),
-		setLen:      stmts.Statement("set_length").Returning(scan),
-		advance:     stmts.Statement("advance").Returning(scan),
-		appendChunk: stmts.Statement("append_chunk"),
-		chunk:       stmts.Statement("chunk").Scan(query.Scalar[[]byte]),
-		delete:      stmts.Statement("delete"),
-		expired:     stmts.Statement("reclaim_expired"),
+		db:           db,
+		stmts:        stmts,
+		create:       stmts.Statement("create"),
+		reclaim:      stmts.Statement("reclaim"),
+		metaRows:     stmts.Statement("meta").Scan(query.Scanner[metaRow]()),
+		progressRows: stmts.Statement("progress").Scan(scan),
+		setLen:       stmts.Statement("set_length").Returning(scan),
+		advance:      stmts.Statement("advance").Returning(scan),
+		appendChunk:  stmts.Statement("append_chunk"),
+		chunk:        stmts.Statement("chunk").Scan(query.Scalar[[]byte]),
+		delete:       stmts.Statement("delete"),
+		expired:      stmts.Statement("reclaim_expired"),
 	}
 	db.Register("uploads", stmts, s)
 	return s
@@ -117,7 +117,7 @@ func (s *store) meta(ctx context.Context, id string) (metaRow, error) {
 }
 
 func (s *store) progress(ctx context.Context, id string) (progressRow, error) {
-	p, err := s.progressRow.One(ctx, s.db, query.Args{"id": id})
+	p, err := s.progressRows.One(ctx, s.db, query.Args{"id": id})
 	return p, missing("progress", id, err)
 }
 
@@ -154,11 +154,11 @@ func (s *store) append(ctx context.Context, id string, offset int64, chunk, stat
 }
 
 func (s *store) open(ctx context.Context, id string) (io.ReadCloser, error) {
-	p, err := s.progressRow.One(ctx, s.db, query.Args{"id": id})
+	p, err := s.progressRows.One(ctx, s.db, query.Args{"id": id})
 	if err != nil {
 		return nil, missing("open", id, err)
 	}
-	return &reader{ctx: ctx, s: s, id: id, end: p.Offset}, nil
+	return io.NopCloser(&reader{ctx: ctx, s: s, id: id, end: p.Offset}), nil
 }
 
 func (s *store) remove(ctx context.Context, id string) error {
@@ -196,8 +196,4 @@ func (r *reader) Read(p []byte) (int, error) {
 	n := copy(p, r.buf)
 	r.buf = r.buf[n:]
 	return n, nil
-}
-
-func (r *reader) Close() error {
-	return nil
 }

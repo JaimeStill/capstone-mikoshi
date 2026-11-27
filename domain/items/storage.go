@@ -108,14 +108,14 @@ func (s *store) settle(ctx context.Context, n newItem, err error) (Item, error) 
 	return Item{}, err
 }
 
-func (s *store) reclaimPending(ctx context.Context, staleAge time.Duration, budget int) (int, error) {
-	for n := range budget {
-		reclaimed, err := s.reclaimStale(ctx, staleAge)
+func reclaimUpTo(ctx context.Context, budget int, reclaim func(context.Context) (bool, error)) (more bool, err error) {
+	for range budget {
+		reclaimed, err := reclaim(ctx)
 		if err != nil || !reclaimed {
-			return n, err
+			return false, err
 		}
 	}
-	return budget, nil
+	return true, nil
 }
 
 func (s *store) reclaimStale(ctx context.Context, staleAge time.Duration) (bool, error) {
@@ -135,16 +135,6 @@ func (s *store) reclaimStale(ctx context.Context, staleAge time.Duration) (bool,
 		}
 		return true, nil
 	}, nil)
-}
-
-func (s *store) reclaimOrphans(ctx context.Context, staleAge time.Duration, budget int) (int, error) {
-	for n := range budget {
-		reclaimed, err := s.reclaimOrphaned(ctx, staleAge)
-		if err != nil || !reclaimed {
-			return n, err
-		}
-	}
-	return budget, nil
 }
 
 func (s *store) reclaimOrphaned(ctx context.Context, staleAge time.Duration) (bool, error) {
