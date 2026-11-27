@@ -13,7 +13,8 @@
 //     for a test that runs a domain's store without a service process.
 //   - [Bucket] makes a client of one bucket on the SeaweedFS S3 gateway
 //     whose endpoint [StorageEnv] holds, the gateway every service process
-//     stores its objects in.
+//     stores its objects in, and [Objects] a started go-storage Store over
+//     such a client, for a domain run without a service process.
 //   - [Options] holds the database one service process connects to and the
 //     MIKOSHI_* overrides it adds.
 //   - [Start] runs the service on a reserved port, against its own

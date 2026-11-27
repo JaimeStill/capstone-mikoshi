@@ -127,6 +127,27 @@ func TestGraph_ServerReachesTheAdminMount(t *testing.T) {
 	}
 }
 
+func TestGraph_ServerReachesTheStorageThroughItems(t *testing.T) {
+	a := app.New(configtest.Config(t), io.Discard)
+	n := a.Nodes()
+	sys, err := a.Graph().Build(n.Server)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	for _, r := range []graph.Ref{n.Items, n.Uploads, n.Storage} {
+		if !sys.Has(r) {
+			t.Errorf("the server's Build does not reach %s\nlayers:\n%s", r.Name(), sys)
+		}
+	}
+	if sys.LayerOf(n.Storage) >= sys.LayerOf(n.Items) {
+		t.Errorf("%s in layer %d, %s in layer %d; want the storage below the items\nlayers:\n%s",
+			n.Storage.Name(), sys.LayerOf(n.Storage), n.Items.Name(), sys.LayerOf(n.Items), sys)
+	}
+	if slices.Contains(a.Roots(), graph.Ref(n.Storage)) {
+		t.Errorf("roots = %v, want the storage reached through the items, not listed", a.Roots())
+	}
+}
+
 func runSet(a *app.App, extra ...graph.Ref) []graph.Ref {
 	return append(append(a.Roots(), a.Nodes().LifecycleConfig), extra...)
 }
@@ -345,7 +366,7 @@ func TestGraph_SchemaListsEveryRegisteredInventory(t *testing.T) {
 	for _, d := range sys.Get(a.Nodes().Schema).Statements().Domains {
 		got = append(got, d.Name)
 	}
-	if want := []string{"contexts", "data"}; !slices.Equal(got, want) {
+	if want := []string{"contexts", "data", "items", "uploads"}; !slices.Equal(got, want) {
 		t.Errorf("statements registry = %v, want %v", got, want)
 	}
 }

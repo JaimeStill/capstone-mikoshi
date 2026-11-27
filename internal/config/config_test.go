@@ -244,6 +244,91 @@ func TestReads_FinalizeRejectsInvalidPolicy(t *testing.T) {
 	}
 }
 
+func TestUploads_FinalizeDefaults(t *testing.T) {
+	cfg := configtest.Minimal()
+	if err := cfg.Finalize(""); err != nil {
+		t.Fatalf("Finalize: %v", err)
+	}
+
+	if got := cfg.Uploads.Lifetime.Duration(); got != 24*time.Hour {
+		t.Errorf("Uploads.Lifetime = %s, want 24h", got)
+	}
+	if got := *cfg.Uploads.MaxAppendSize; got != 4<<20 {
+		t.Errorf("Uploads.MaxAppendSize = %d, want 4 MiB", got)
+	}
+	if cfg.Uploads.Env != (config.UploadsEnv{}) {
+		t.Errorf("Uploads.Env = %+v, want empty under the empty prefix", cfg.Uploads.Env)
+	}
+}
+
+func TestUploads_MergeOverlaysSetFields(t *testing.T) {
+	base := &config.Config{}
+	base.Uploads.Lifetime = new(libconfig.Duration(time.Hour))
+	base.Uploads.MaxAppendSize = new(int64(1024))
+
+	overlay := &config.Config{}
+	overlay.Uploads.MaxAppendSize = new(int64(2048))
+
+	base.Merge(overlay)
+
+	if got := *base.Uploads.MaxAppendSize; got != 2048 {
+		t.Errorf("Uploads.MaxAppendSize = %d, want 2048", got)
+	}
+	if got := base.Uploads.Lifetime.Duration(); got != time.Hour {
+		t.Errorf("Uploads.Lifetime = %s, want 1h", got)
+	}
+}
+
+func TestUploads_FinalizeEnvOverrides(t *testing.T) {
+	t.Setenv("MIKOSHI_UPLOADS_LIFETIME", "90m")
+	t.Setenv("MIKOSHI_UPLOADS_MAX_APPEND_SIZE", "65536")
+
+	cfg := configtest.Minimal()
+	if err := cfg.Finalize("mikoshi"); err != nil {
+		t.Fatalf("Finalize: %v", err)
+	}
+
+	if got := cfg.Uploads.Lifetime.Duration(); got != 90*time.Minute {
+		t.Errorf("Uploads.Lifetime = %s, want 1h30m", got)
+	}
+	if got := *cfg.Uploads.MaxAppendSize; got != 65536 {
+		t.Errorf("Uploads.MaxAppendSize = %d, want 65536", got)
+	}
+	want := config.UploadsEnv{Lifetime: "MIKOSHI_UPLOADS_LIFETIME", MaxAppendSize: "MIKOSHI_UPLOADS_MAX_APPEND_SIZE"}
+	if cfg.Uploads.Env != want {
+		t.Errorf("Uploads.Env = %+v, want %+v", cfg.Uploads.Env, want)
+	}
+}
+
+func TestUploads_FinalizeRejectsInvalidPolicy(t *testing.T) {
+	cases := map[string]struct {
+		lifetime, maxAppendSize string
+		want                    string
+	}{
+		"lifetime zero":                {"0s", "1024", "lifetime"},
+		"lifetime negative":            {"-1h", "1024", "lifetime"},
+		"lifetime not a duration":      {"soon", "1024", "MIKOSHI_UPLOADS_LIFETIME"},
+		"max-append-size zero":         {"1h", "0", "max_append_size"},
+		"max-append-size past Integer": {"1h", "1000000000000000", "max_append_size"},
+		"max-append-size not a number": {"1h", "lots", "MIKOSHI_UPLOADS_MAX_APPEND_SIZE"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("MIKOSHI_UPLOADS_LIFETIME", tc.lifetime)
+			t.Setenv("MIKOSHI_UPLOADS_MAX_APPEND_SIZE", tc.maxAppendSize)
+
+			cfg := configtest.Minimal()
+			err := cfg.Finalize("mikoshi")
+			if err == nil {
+				t.Fatal("Finalize accepted an invalid uploads policy")
+			}
+			if !strings.Contains(err.Error(), "uploads:") || !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("error = %v, want the uploads block wrap naming %s", err, tc.want)
+			}
+		})
+	}
+}
+
 func TestDatabase_FinalizeDefaults(t *testing.T) {
 	cfg := configtest.Minimal()
 	if err := cfg.Finalize(""); err != nil {

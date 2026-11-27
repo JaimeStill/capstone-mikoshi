@@ -1,6 +1,7 @@
 package integration
 
 import (
+	"context"
 	"net"
 	"net/url"
 	"os"
@@ -152,6 +153,24 @@ func Bucket(t testing.TB, name string) storage.Client {
 		t.Fatalf("new s3 client: %v", err)
 	}
 	return client
+}
+
+// Objects returns a started go-storage Store over [Bucket]'s client of the
+// bucket name, the bucket ensured by its Start, and shuts it down when the
+// test ends, for a test that runs a domain over the object store without
+// a service process.
+func Objects(t testing.TB, name string) *storage.Store {
+	t.Helper()
+	cfg := storage.Config{Container: name}
+	if err := cfg.Finalize(""); err != nil {
+		t.Fatalf("finalize the store's storage config: %v", err)
+	}
+	store := storage.New(Bucket(t, name), cfg)
+	if err := store.Start(t.Context()); err != nil {
+		t.Fatalf("start the store of %s: %v", name, err)
+	}
+	t.Cleanup(func() { _ = store.Shutdown(context.Background()) })
+	return store
 }
 
 func environment(t testing.TB, opts Options, addr, dsn, storageEndpoint string) []string {

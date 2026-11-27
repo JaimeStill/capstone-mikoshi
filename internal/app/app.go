@@ -16,6 +16,8 @@ import (
 
 	"github.com/JaimeStill/capstone-mikoshi/data"
 	"github.com/JaimeStill/capstone-mikoshi/domain/contexts"
+	"github.com/JaimeStill/capstone-mikoshi/domain/items"
+	"github.com/JaimeStill/capstone-mikoshi/domain/uploads"
 	"github.com/JaimeStill/capstone-mikoshi/internal/config"
 )
 
@@ -59,8 +61,12 @@ type Nodes struct {
 	Gate   *graph.Node[*reactor.Gate]
 	Schema *graph.Node[*Schema]
 
-	// Domain (domain.go): the contexts service, the context tree.
+	// Domain (domain.go): the contexts service, the context tree; the
+	// uploads service, the resumable uploads in progress; and the items
+	// service, the items and the blobs they name.
 	Contexts *graph.Node[*contexts.Service]
+	Uploads  *graph.Node[*uploads.Service]
+	Items    *graph.Node[*items.Service]
 
 	// Reactors (reactors.go): the group each reactor joins with graph.In.
 	// A reactor is reached by no Use, so the group is one of [App.Roots],
@@ -110,14 +116,13 @@ func (a *App) Nodes() Nodes { return a.nodes }
 // service starts from: the server, which reaches the router, the
 // readiness, the domain services, the admin mount's schema and gate, the
 // sql node, the database, the logger, the writer node, and the config
-// node through its Uses and theirs; the reactors group, whose members no
-// Use reaches; and the storage, which no Use reaches yet, so the bucket is
-// ensured at startup and the store joins the readiness probe.
+// node through its Uses and theirs, the storage among them through the
+// items service; and the reactors group, whose members no Use reaches.
 // [App.Run] builds this set plus the lifecycle config node the Coordinator
 // is configured from.
 func (a *App) Roots() []graph.Ref {
 	n := a.nodes
-	return []graph.Ref{n.Server, n.Reactors, n.Storage}
+	return []graph.Ref{n.Server, n.Reactors}
 }
 
 // Run runs the service as a web.Service over [App.Roots] until ctx ends,

@@ -1,8 +1,8 @@
 // Package config declares the service's layered configuration.
 //
 //   - [Config] is the root: the library capability blocks (log, server,
-//     database, storage), the service-owned read policy, and the shutdown
-//     timeout. The database block's password and the storage block's key
+//     database, storage), the service-owned read and upload policies, and
+//     the shutdown timeout. The database block's password and the storage block's key
 //     come from the secrets file (secrets.json, gitignored, shaped as
 //     secrets.example.json) or MIKOSHI_DATABASE_PASSWORD and
 //     MIKOSHI_STORAGE_KEY, never from a committed configuration file. The
@@ -16,6 +16,11 @@
 //     Finalize; its Limits method hands the policy to a handler as
 //     web.Limits. [ReadsEnv] records the environment-variable names its
 //     Finalize read.
+//   - [UploadsConfig] is the service-owned upload policy, with its own
+//     Merge and Finalize: the lifetime of a resumable upload and the
+//     max-append-size the upload handler announces and enforces.
+//     [UploadsEnv] records the environment-variable names its Finalize
+//     read.
 //   - [Load] reads the layered files, decoding each strictly, and finalizes
 //     the result under the service's env prefix.
 //

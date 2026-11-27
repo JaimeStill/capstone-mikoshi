@@ -29,5 +29,9 @@
     "default_size": 20,
     "max_size": 100
   },
+  "uploads": {
+    "lifetime": "24h",
+    "max_append_size": 4194304
+  },
   "shutdown_timeout": "10s"
 }

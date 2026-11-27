@@ -51,6 +51,8 @@ func (n *Nodes) newSchema(s *graph.Scope) (*Schema, error) {
 	}
 
 	s.Use(n.Contexts)
+	s.Use(n.Uploads)
+	s.Use(n.Items)
 
 	return &Schema{
 		Service: admin.New(s.Use(n.Database), sql.DB, migrator, sql.Catalog, admin.Options{
