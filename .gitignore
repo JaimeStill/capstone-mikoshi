@@ -1,0 +1,14 @@
+secrets*.json
+
+bin/
+*.test
+coverage.out
+coverage.html
+
+go.work
+go.work.sum
+tmp/
+
+# marathon
+.claude/plans/
+.claude/briefs/
