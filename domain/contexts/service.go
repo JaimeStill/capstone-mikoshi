@@ -76,7 +76,7 @@ func (s *Service) Rename(ctx context.Context, id string, r RenameContext) (Conte
 	if parsed.String() == Root {
 		return Context{}, ErrRootFixed
 	}
-	return s.store.setName(ctx, id, r.Name)
+	return s.store.setName(ctx, parsed.String(), r.Name)
 }
 
 // Move sets the parent of the context with the given id and, when the
