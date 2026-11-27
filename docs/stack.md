@@ -31,10 +31,10 @@ Only these packages import a provider or use pgvector:
 - The admin domain, `admin/database`, through go-database's admin service alone: it reports
   pgvector's status in the schema status and imports no provider.
 
-Every other package stays provider-free: the admin service receives the pool as a go-database
-`database.DB`, the domains receive the `sql` node's `data.Database`, the dialect-wrapped session
-and the pattern catalog their statements compile against, and a package that keeps objects, the
-items domain, receives the `storage` node's `storage.Store`, go-storage's standard tier. The
+Every other package stays provider-free. The admin service receives the pool as a go-database
+`database.DB`. The domains receive the `sql` node's `data.Database`, the dialect-wrapped session
+and the pattern catalog their statements compile against. The items domain, the one package that
+keeps objects, receives the `storage` node's `storage.Store`, go-storage's standard tier. The
 integration harness and suite sit outside the service's process and reach the database and the
 gateway directly: the harness makes each test's database through sqlate's `postgres/pgtest` and
 reaches a bucket through go-storage's `s3`, and the suite names pgvector from `postgres/pgvector`
@@ -53,8 +53,7 @@ uses and its ports:
   and [`claim_orphan_blob.sql`](../domain/items/statements/claim_orphan_blob.sql), the blob
   reclaimers' claims, `SELECT ... FOR UPDATE SKIP LOCKED` ([Items](items.md#reclamation)).
 
-sqlint does not check the migrations' forms, so review
-holds the migrations list below.
+sqlint does not check the migrations' forms, so review holds the migrations list below.
 
 ## What a provider swap changes
 

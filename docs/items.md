@@ -83,9 +83,9 @@ key, and one deleted after takes its references with it by cascade.
 `GET /api/contexts/{id}/items` pages the items a context covers: the items referenced in every
 explicit context of its subtree, the context included, and the items each query context of the
 subtree selects from every item, each item once. A query context's filter is evaluated over the
-item list read, whose field contract is `route` and `kind` (text) and `duration` (a number). The
-composition root hands that contract to the contexts domain, which refuses a filter naming any
-other field when the context is created ([Contexts](contexts.md#filters)).
+projection that reads every item, whose field contract is `route` and `kind` (text) and `duration`
+(a number). The composition root hands that contract to the contexts domain, which refuses a filter
+naming any other field when the context is created ([Contexts](contexts.md#filters)).
 
 ## Deleting an item
 
@@ -112,12 +112,13 @@ making it fresh, and the reclaimer passes it by.
 
 ## Reclamation
 
-go-database's sweeper, the composition root's one reactor ([`internal/app/reactors.go`](../internal/app/reactors.go)),
-runs three reclaimers, each owned by the domain whose data it removes. Each is scheduled by its
-block under `sweep`: the least time between the starts of two of its passes (`interval`) and the
-most units one pass removes (`budget`). The sweeper takes a session advisory lock per reclaimer,
-`sweep.<name>`, a prefix [`data/locks.go`](../data/locks.go) reserves, so two replicas never run
-one reclaimer at once. It is a readiness check: `/readyz` lists `sweeper`.
+go-database's sweeper, the composition root's one reactor
+([`internal/app/reactors.go`](../internal/app/reactors.go)), runs three reclaimers, each owned by
+the domain whose data it removes. Each is scheduled by its block under `sweep`: the least time
+between the starts of two of its passes (`interval`) and the most units one pass removes
+(`budget`). The sweeper takes a session advisory lock per reclaimer, `sweep.<name>`, a prefix
+[`data/locks.go`](../data/locks.go) reserves, so two replicas never run one reclaimer at once. The
+sweeper is a readiness check: `/readyz` lists `sweeper`.
 
 | Reclaimer | Owner | What it removes | Defaults |
 |-----------|-------|-----------------|----------|
