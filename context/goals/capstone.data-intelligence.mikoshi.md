@@ -96,7 +96,7 @@ Two-way: there is no release and no migration, and every change can be reverted 
 
 ## Progress
 
-slices 0/3 committed · standards — · spec — · editor —
+slices 3/3 committed · standards — · spec — · editor —
 
 ## Decisions
 
@@ -112,7 +112,7 @@ slices 0/3 committed · standards — · spec — · editor —
 
 ## Pending edits
 
-- coordinator · lands at web-shell's SHIP as standards-lab PR `plan-sse-foundation`, after Bunrei's `plan-capstone.data-intelligence.bunrei` merges (architect's order), approved with this task's brief:
+- coordinator · lands at web-shell's SHIP as standards-lab PR `plan-sse-foundation`, after Bunrei's `plan-capstone.data-intelligence.bunrei` merges (architect's order: Bunrei's, then this, then `.foundation`'s `upload` edit), approved with this task's brief; once merged, message the Bunrei and the capstone-data-intelligence (`.foundation` protocol) sessions:
   - roadmap/capstone.data-intelligence.bunrei.toml: `repos` adds go-core, go-web-sdk, go-ai; the summary names the SSE codec and writer; `order` adds `sse-codec` (go-core: `text/event-stream` read and written to the WHATWG rules beside `event`, released), `sse-writer` (go-web-sdk: on the codec, `Cache-Control: no-store`, a flush per event, the write deadline reset, ended on the run context so the drain exits 0, released), and `go-ai-sse` (go-ai takes go-core; `format.SSE` reads through the codec in place of `internal/sse`, released) after `messaging-work-queue`, before `state`.
   - roadmap/capstone.data-intelligence.mikoshi.toml: web-shell's summary drops the SSE relay; context-tools' opens "Waits on: `.bunrei` `sse-writer` and `go-ai-sse`" and streams its answer through go-web-sdk's writer, one event per committed turn or analysis.
   - roadmap/mikoshi-web-graduation.toml: "the SSE relay into go-web-sdk" becomes the event relay, if evidence 15 picks it.
