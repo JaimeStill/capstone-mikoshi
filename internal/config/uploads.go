@@ -17,8 +17,8 @@ const (
 // UploadsConfig is the service-owned policy of the resumable upload
 // handler: how long an upload lives from its creation, and the
 // max-append-size, the most content one creation or append carries, which
-// the handler announces and enforces. Pointer fields distinguish unset
-// from zero.
+// the handler announces and enforces, and which bounds a posted record's
+// body too. Pointer fields distinguish unset from zero.
 type UploadsConfig struct {
 	Lifetime      *libconfig.Duration `json:"lifetime"`
 	MaxAppendSize *int64              `json:"max_append_size"`

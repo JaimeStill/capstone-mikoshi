@@ -49,6 +49,22 @@ type CreateFile struct {
 	Size      int64
 }
 
+// CreateRecord is the record create command's input: Name, the name the
+// posted record carried, which must not be empty.
+type CreateRecord struct {
+	Name string
+}
+
+// Validate rejects an empty name.
+func (c CreateRecord) Validate() error {
+	if c.Name == "" {
+		return fmt.Errorf("%w: name must not be empty", ErrValidation)
+	}
+	return nil
+}
+
+const recordMediaType = "application/json"
+
 var hexSHA256 = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
 // Validate rejects an empty upload id, an empty media type, a SHA-256

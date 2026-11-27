@@ -354,6 +354,84 @@ func TestService_CreateFileValidatesBeforeTheStore(t *testing.T) {
 	}
 }
 
+var record = []byte(`{"title": "notes",  "tags": ["a", "b"]}` + "\n")
+
+func recordRow(content []byte) sqltest.Response {
+	return sqltest.Response{
+		Columns: itemColumns,
+		Rows: [][]driver.Value{{itemID, "record", "notes.json", "application/json", digest(content), int64(len(content)), "text", nil, nil,
+			time.Date(2026, 11, 27, 12, 0, 0, 0, time.UTC)}},
+	}
+}
+
+func TestService_CreateRecordStoresTheBytesAsAJSONBlob(t *testing.T) {
+	f := service(t, none(), none(), affected(1), affected(1), recordRow(record))
+	item, err := f.service.CreateRecord(t.Context(), items.CreateRecord{Name: "notes.json"}, record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item.ID != itemID || item.Type != items.TypeRecord || item.MediaType != "application/json" {
+		t.Errorf("CreateRecord = %+v", item)
+	}
+	sameOps(t, f.rec, begin, q, q, x, commit, begin, x, q, commit)
+	if f.fake.Puts() != 1 || !bytes.Equal(stored(t, f, record), record) {
+		t.Errorf("puts = %d, want the record's exact bytes written once at its digest's key", f.fake.Puts())
+	}
+	for _, c := range f.rec.Calls() {
+		if strings.Contains(c.SQL, "WHERE upload_id") {
+			t.Errorf("call %+v, want no read by upload id", c)
+		}
+	}
+	insert := callsTo(f.rec, "INSERT INTO item")
+	if len(insert) != 1 {
+		t.Fatalf("item inserts = %+v, want one", insert)
+	}
+	if want := []any{"record", "notes.json", "application/json", digest(record), int64(len(record)), "text", nil, nil}; !slices.Equal(insert[0].Args[1:], want) {
+		t.Errorf("item insert args = %v, want %v", insert[0].Args[1:], want)
+	}
+}
+
+func TestService_CreateRecordTwiceCreatesTwoItemsOverOneBlob(t *testing.T) {
+	f := service(t, blob(record, "available"), recordRow(record), blob(record, "available"), recordRow(record))
+	for range 2 {
+		if _, err := f.service.CreateRecord(t.Context(), items.CreateRecord{Name: "notes.json"}, record); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sameOps(t, f.rec, begin, q, q, commit, begin, q, q, commit)
+	if n := len(callsTo(f.rec, "INSERT INTO item")); n != 2 {
+		t.Errorf("item inserts = %d, want two", n)
+	}
+	if f.fake.Puts() != 0 {
+		t.Errorf("puts = %d, want none over available content", f.fake.Puts())
+	}
+}
+
+func TestService_CreateRecordValidatesBeforeTheStore(t *testing.T) {
+	cases := []struct {
+		name    string
+		command items.CreateRecord
+		content []byte
+	}{
+		{"no name", items.CreateRecord{}, record},
+		{"not JSON", items.CreateRecord{Name: "notes.json"}, []byte(`{"title": `)},
+		{"two values", items.CreateRecord{Name: "notes.json"}, []byte(`{} {}`)},
+		{"an empty body", items.CreateRecord{Name: "notes.json"}, nil},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f := service(t)
+			if _, err := f.service.CreateRecord(t.Context(), c.command, c.content); !errors.Is(err, items.ErrValidation) {
+				t.Errorf("CreateRecord = %v, want ErrValidation", err)
+			}
+			sameOps(t, f.rec)
+			if f.fake.Puts() != 0 {
+				t.Errorf("puts = %d, want none", f.fake.Puts())
+			}
+		})
+	}
+}
+
 func ooxml(t *testing.T) []byte {
 	t.Helper()
 	var buf bytes.Buffer

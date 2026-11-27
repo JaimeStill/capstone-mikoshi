@@ -138,7 +138,8 @@
 // uploads service, with the lifetime and max-append-size of the
 // configuration's uploads block, the max-append-size as the limit of the
 // server block's Transfer, and the items layer's Completion as its
-// Complete, which answers with the item's Location under /api/items.
+// Complete, which answers with the item's Location under /api/items. The
+// items group's record create reads its body under that same Transfer.
 //
 // A reactor runs for the process lifetime, driven by an occurrence (a
 // subscription, an interval, a wake on demand) rather than a caller, the

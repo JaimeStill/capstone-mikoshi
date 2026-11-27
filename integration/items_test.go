@@ -288,6 +288,96 @@ func TestItems_IdenticalContentSharesOneBlob(t *testing.T) {
 	}
 }
 
+func recordName(name string) webtest.Header {
+	return webtest.Header{Name: "Content-Disposition", Value: `attachment; filename="` + name + `"`}
+}
+
+func TestItems_PostRecordCreatesARecordItem(t *testing.T) {
+	name := bucketName()
+	db := integration.Database(t)
+	s := integration.Start(t, integration.Options{Database: db, Env: []string{"MIKOSHI_STORAGE_CONTAINER=" + name}})
+	content := []byte("{\"title\":  \"field notes\",\n \"tags\": [\"a\", \"b\"]}\n")
+
+	res := s.Client().Post(t, "/api/items", content, recordName("notes.json"))
+	item := webtest.Decode[items.Item](t, res, http.StatusCreated)
+	if loc := res.Header.Get("Location"); loc != "/api/items/"+item.ID {
+		t.Errorf("Location = %q, want /api/items/%s", loc, item.ID)
+	}
+	want := items.Item{
+		ID: item.ID, Type: items.TypeRecord, Name: "notes.json", MediaType: "application/json",
+		SHA256: hexDigest(content), Size: int64(len(content)), Route: "text", CreatedAt: item.CreatedAt,
+	}
+	if !sameItem(t, item, want) {
+		t.Errorf("item = %+v, want %+v", item, want)
+	}
+	read := webtest.Decode[items.Item](t, s.Client().Get(t, "/api/items/"+item.ID), http.StatusOK)
+	if !sameItem(t, read, item) {
+		t.Errorf("read %+v, want %+v", read, item)
+	}
+	if got := objectOf(t, integration.Bucket(t, name), item.SHA256); !bytes.Equal(got, content) {
+		t.Errorf("object holds %q, want the posted bytes %q", got, content)
+	}
+	if n := countRows(t, db, "SELECT COUNT(*) FROM item WHERE id = $1 AND upload_id IS NULL", item.ID); n != 1 {
+		t.Errorf("records with no upload id = %d, want 1", n)
+	}
+}
+
+func TestItems_IdenticalRecordsAreTwoItemsOverOneBlob(t *testing.T) {
+	name := bucketName()
+	db := integration.Database(t)
+	s := integration.Start(t, integration.Options{Database: db, Env: []string{"MIKOSHI_STORAGE_CONTAINER=" + name}})
+	content := []byte(`{"same": true}`)
+
+	first := webtest.Decode[items.Item](t, s.Client().Post(t, "/api/items", content, recordName("one.json")), http.StatusCreated)
+	second := webtest.Decode[items.Item](t, s.Client().Post(t, "/api/items", content, recordName("one.json")), http.StatusCreated)
+
+	if first.ID == second.ID || first.SHA256 != second.SHA256 {
+		t.Errorf("items %+v and %+v, want two items over one digest", first, second)
+	}
+	if n := countRows(t, db, "SELECT COUNT(*) FROM item WHERE type = 'record'"); n != 2 {
+		t.Errorf("record items = %d, want 2", n)
+	}
+	if n := countRows(t, db, "SELECT COUNT(*) FROM blob"); n != 1 {
+		t.Errorf("blob rows = %d, want 1", n)
+	}
+	page, err := integration.Bucket(t, name).List(t.Context(), storage.ListOptions{Prefix: "sha256/"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Objects) != 1 || page.Objects[0].Key != "sha256/"+first.SHA256 {
+		t.Errorf("objects = %+v, want the one object at sha256/%s", page.Objects, first.SHA256)
+	}
+}
+
+func TestItems_PostRecordRefusals(t *testing.T) {
+	db := integration.Database(t)
+	s := integration.Start(t, integration.Options{Database: db, Env: []string{"MIKOSHI_UPLOADS_MAX_APPEND_SIZE=1024"}})
+	refused := []struct {
+		name    string
+		body    []byte
+		headers []webtest.Header
+		status  int
+	}{
+		{"invalid JSON", []byte(`{"title": `), []webtest.Header{recordName("notes.json")}, http.StatusBadRequest},
+		{"no name", []byte(`{}`), nil, http.StatusBadRequest},
+		{"an empty name", []byte(`{}`), []webtest.Header{recordName("")}, http.StatusBadRequest},
+		{"a body over the configured limit", bytes.Repeat([]byte(" "), 1025), []webtest.Header{recordName("big.json")}, http.StatusRequestEntityTooLarge},
+	}
+	for _, r := range refused {
+		t.Run(r.name, func(t *testing.T) {
+			if p := s.Client().Post(t, "/api/items", r.body, r.headers...).Problem(t, r.status); p.Instance != "/api/items" {
+				t.Errorf("instance %q, want the request's path", p.Instance)
+			}
+		})
+	}
+	if n := countRows(t, db, "SELECT COUNT(*) FROM item"); n != 0 {
+		t.Errorf("items = %d, want none", n)
+	}
+	if n := countRows(t, db, "SELECT COUNT(*) FROM blob"); n != 0 {
+		t.Errorf("blob rows = %d, want none", n)
+	}
+}
+
 func completing(t *testing.T, s *integration.Service, content []byte) string {
 	t.Helper()
 	repr, err := upload.FormatDigest(hexDigest(content))

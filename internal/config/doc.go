@@ -18,8 +18,8 @@
 //     Finalize read.
 //   - [UploadsConfig] is the service-owned upload policy, with its own
 //     Merge and Finalize: the lifetime of a resumable upload and the
-//     max-append-size the upload handler announces and enforces.
-//     [UploadsEnv] records the environment-variable names its Finalize
+//     max-append-size the upload handler announces and enforces, which
+//     bounds a posted record's body too. [UploadsEnv] records the environment-variable names its Finalize
 //     read.
 //   - [Load] reads the layered files, decoding each strictly, and finalizes
 //     the result under the service's env prefix.

@@ -100,10 +100,13 @@ func (s *store) insert(ctx context.Context, tx *sqlate.Tx, n newItem) (Item, err
 		"size":       n.Size,
 		"route":      n.route,
 		"kind":       nil,
-		"upload_id":  n.UploadID,
+		"upload_id":  nil,
 	}
 	if n.kind != nil {
 		args["kind"] = *n.kind
+	}
+	if n.UploadID != "" {
+		args["upload_id"] = n.UploadID
 	}
 	created, _, err := s.create.One(ctx, tx, args)
 	return created, err

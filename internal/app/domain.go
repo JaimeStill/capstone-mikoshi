@@ -41,11 +41,12 @@ func mountAPI(s *graph.Scope, n *Nodes) *web.Group {
 	reads := cfg.Reads.Limits()
 	reads.Cursor = true
 	itemService := s.Use(n.Items)
+	transfer := cfg.Server.Transfer(*cfg.Uploads.MaxAppendSize)
 	api.Mount(contexts.Routes(s.Use(n.Contexts), reads, logger))
-	api.Mount(items.Routes(itemService, reads, logger))
+	api.Mount(items.Routes(itemService, reads, transfer, logger))
 	api.Mount(upload.Handler{
 		Store:    s.Use(n.Uploads),
-		Transfer: cfg.Server.Transfer(*cfg.Uploads.MaxAppendSize),
+		Transfer: transfer,
 		Lifetime: cfg.Uploads.Lifetime.Duration(),
 		Complete: items.Completion(itemService, itemsPath),
 		Logger:   logger,

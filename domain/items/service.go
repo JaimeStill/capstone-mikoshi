@@ -1,10 +1,12 @@
 package items
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -18,8 +20,9 @@ import (
 	"github.com/JaimeStill/capstone-mikoshi/data"
 )
 
-// Service is the items domain service: the layer's public API, the reads
-// and the file create, every operation delegated to the store.
+// Service is the items domain service: the layer's public API, the reads,
+// the file create, and the record create, every operation delegated to
+// the store.
 type Service struct {
 	store *store
 }
@@ -101,6 +104,37 @@ func (s *Service) CreateFile(ctx context.Context, c CreateFile, content io.Reade
 		return Item{}, err
 	}
 	return s.store.createOver(ctx, newItem{CreateFile: c, itemType: TypeFile, route: r, kind: kind}, tmp)
+}
+
+// CreateRecord creates a record item from content, a posted JSON value,
+// and returns the item as the read presents it. The content is stored
+// byte for byte as an application/json blob, by the protocol and at the
+// key a file's content is, and routed by docproc's route package as a
+// file's is. A record is idempotent on nothing: two calls create two
+// items, over one blob when their content is the same. An empty name or
+// content that is not valid JSON is ErrValidation.
+func (s *Service) CreateRecord(ctx context.Context, c CreateRecord, content []byte) (Item, error) {
+	if err := c.Validate(); err != nil {
+		return Item{}, err
+	}
+	if !json.Valid(content) {
+		return Item{}, fmt.Errorf("%w: the record is not valid JSON", ErrValidation)
+	}
+	sum := sha256.Sum256(content)
+	n := newItem{
+		Name:      c.Name,
+		MediaType: recordMediaType,
+		SHA256:    hex.EncodeToString(sum[:]),
+		Size:      int64(len(content)),
+		itemType:  TypeRecord,
+	}
+	body := bytes.NewReader(content)
+	r, kind, err := sniff(body, n.Size, n.Name, n.MediaType)
+	if err != nil {
+		return Item{}, err
+	}
+	n.route, n.kind = r, kind
+	return s.store.createOver(ctx, n, body)
 }
 
 func sniff(content io.ReaderAt, size int64, name, mediaType string) (string, *string, error) {
