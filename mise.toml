@@ -15,7 +15,7 @@ GO_MODULES = "."
 
 [tasks.check]
 depends = ["client:build", "client:check"]
-description = "Build, vet, format, fix, tidy, test the unit tier, and lint every module, vetting, fixing, and linting the integration suite too, then run lint-context and lint-references at the project root and, when the project is nested, at the git top level; writes nothing"
+description = "Build and check the web client in web, then build, vet, format, fix, tidy, test the unit tier, and lint every module, vetting, fixing, and linting the integration suite too, then run lint-context and lint-references at the project root and, when the project is nested, at the git top level; writes nothing but the client's build, web/dist/"
 run = '''
 set -eu
 export GOWORK=off

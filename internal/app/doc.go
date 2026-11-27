@@ -12,6 +12,10 @@
 //   - reactors.go: defineReactors, the process-lifetime entry points an
 //     occurrence drives, each a node whose value is a go-core
 //     reactor.Reactor;
+//   - client.go: defineClient, the web client's embedded build and the
+//     handler that serves its shell and assets, and their mount, the
+//     router's not-found handler, so every path no mount or probe claims
+//     reaches the client;
 //   - server.go: defineServer, the request edge: the readiness the probes
 //     report, the router, and the server;
 //   - routes.go: the list of mounts;
