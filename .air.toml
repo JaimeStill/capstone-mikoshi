@@ -1,0 +1,18 @@
+# The service's live reload under air, which mise run dev runs.
+root = "."
+tmp_dir = "tmp"
+
+[build]
+bin = "./tmp/main"
+cmd = "go build -o ./tmp/main ./cmd/server"
+delay = 1000
+exclude_dir = ["tmp", "bin", "web/node_modules", "web/src", "web/test", "web/scripts"]
+include_ext = ["go", "js", "css"]
+kill_delay = 500
+send_interrupt = true
+
+[log]
+time = false
+
+[misc]
+clean_on_exit = true

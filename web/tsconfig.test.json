@@ -1,0 +1,12 @@
+// The tests' and the scripts' type-check (mise run types:test), against node's types.
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "lib": ["es2024"],
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "types": ["node"],
+    "checkJs": false
+  },
+  "include": ["test/**/*.ts", "scripts/**/*.ts"]
+}

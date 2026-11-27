@@ -3,7 +3,9 @@ package app
 import (
 	"context"
 	"io"
+	"io/fs"
 	"log/slog"
+	"net/http"
 
 	"github.com/standards-lab/go-core/graph"
 	"github.com/standards-lab/go-core/lifecycle"
@@ -46,6 +48,10 @@ type Nodes struct {
 	Readiness *graph.Node[*lifecycle.Readiness]
 	Router    *graph.Node[*web.Router]
 	Server    *graph.Node[*web.Server]
+
+	// The web client (client.go): the build it serves and its handler.
+	Dist   *graph.Node[fs.FS]
+	Client *graph.Node[http.Handler]
 }
 
 // New describes the graph over cfg and a writer for the service's logger,
@@ -62,6 +68,7 @@ func New(cfg *config.Config, w io.Writer) *App {
 	defineAdmin(a.graph, &a.nodes)
 	defineDomain(a.graph, &a.nodes)
 	defineReactors(a.graph, &a.nodes)
+	defineClient(a.graph, &a.nodes)
 	defineServer(a.graph, &a.nodes)
 	return a
 }
