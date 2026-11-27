@@ -7,11 +7,8 @@ import (
 	"github.com/standards-lab/go-core/reactor"
 	"github.com/standards-lab/go-database/admin"
 	"github.com/standards-lab/go-web-sdk"
-	"github.com/standards-lab/sqlate"
 	"github.com/standards-lab/sqlate/migrate"
-	pgdialect "github.com/standards-lab/sqlate/postgres"
 	"github.com/standards-lab/sqlate/postgres/pgvector"
-	"github.com/standards-lab/sqlate/query"
 
 	dbadmin "github.com/JaimeStill/capstone-mikoshi/admin/database"
 	"github.com/JaimeStill/capstone-mikoshi/data"
@@ -23,11 +20,10 @@ func defineAdmin(g *graph.Graph, n *Nodes) {
 }
 
 func (n *Nodes) newSchema(s *graph.Scope) (*admin.Service, error) {
-	pool := s.Use(n.Database)
+	sql := s.Use(n.SQL)
 	logger := s.Use(n.Logger)
 
-	db := sqlate.Wrap(pool.Conn(), pgdialect.Dialect{})
-	migrator, err := migrate.New(db, []migrate.Set{data.Migrations()}, migrate.Options{
+	migrator, err := migrate.New(sql.DB, []migrate.Set{data.Migrations()}, migrate.Options{
 		Logger:     logger,
 		Extensions: []migrate.Extension{{Name: pgvector.Extension}},
 	})
@@ -35,7 +31,7 @@ func (n *Nodes) newSchema(s *graph.Scope) (*admin.Service, error) {
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
 
-	return admin.New(pool, db, migrator, query.MustCatalog(query.Patterns()), admin.Options{
+	return admin.New(s.Use(n.Database), sql.DB, migrator, sql.Catalog, admin.Options{
 		Logger: logger,
 	}), nil
 }

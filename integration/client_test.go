@@ -120,11 +120,11 @@ func TestClient_ProbesAndAPIAreNotTheShell(t *testing.T) {
 		}
 	}
 
-	res := c.Get(t, "/api/contexts")
+	res := c.Get(t, "/api/unrouted")
 	if strings.HasPrefix(res.Header.Get("Content-Type"), "text/html") {
-		t.Fatalf("GET /api/contexts answered the shell:\n%s", res.Body)
+		t.Fatalf("GET /api/unrouted answered the shell:\n%s", res.Body)
 	}
-	if p := res.Problem(t, http.StatusNotFound); p.Instance != "/api/contexts" {
-		t.Errorf("problem instance = %q, want /api/contexts", p.Instance)
+	if p := res.Problem(t, http.StatusNotFound); p.Instance != "/api/unrouted" {
+		t.Errorf("problem instance = %q, want /api/unrouted", p.Instance)
 	}
 }

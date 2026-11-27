@@ -17,7 +17,7 @@ MIKOSHI_INTEGRATION_DSN = "postgres://app:app@127.0.0.1:{{ get_env(name='POSTGRE
 
 [tasks.check]
 depends = ["client:build", "client:check"]
-description = "Build and check the web client in web, then build, vet, format, fix, tidy, test the unit tier, and lint every module, vetting, fixing, and linting the integration suite too, then run lint-context and lint-references at the project root and, when the project is nested, at the git top level; writes nothing but the client's build, web/dist/"
+description = "Build and check the web client in web, then build, vet, format, fix, tidy, test the unit tier, and lint every module, vetting, fixing, and linting the integration suite too, sqlint the SQL files, then run lint-context and lint-references at the project root and, when the project is nested, at the git top level; writes nothing but the client's build, web/dist/"
 run = '''
 set -eu
 export GOWORK=off
@@ -33,7 +33,9 @@ for mod in $GO_MODULES; do
   go test -race ./...
   golangci-lint run --build-tags integration ./...
 done
+echo "check: sqlint"
 cd "$MISE_PROJECT_ROOT"
+go tool sqlint
 root=$(pwd -P)
 top=$(git rev-parse --show-toplevel 2>/dev/null || echo "$root")
 fail=0
@@ -95,8 +97,8 @@ description = "Run go mod tidy"
 run = "go mod tidy"
 
 [tasks.lint]
-description = "Run golangci-lint, the integration suite included"
-run = "golangci-lint run --build-tags integration ./..."
+description = "Run golangci-lint, the integration suite included, then sqlint over the SQL files"
+run = "golangci-lint run --build-tags integration ./... && go tool sqlint"
 
 [tasks."db:up"]
 description = "Build and start the development PostgreSQL (on POSTGRES_PORT, default 5440) and wait until it is healthy"

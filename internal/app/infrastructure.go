@@ -8,12 +8,18 @@ import (
 	"github.com/standards-lab/go-core/logging"
 	"github.com/standards-lab/go-database"
 	"github.com/standards-lab/go-database/postgres"
+	"github.com/standards-lab/sqlate"
+	pgdialect "github.com/standards-lab/sqlate/postgres"
+	"github.com/standards-lab/sqlate/query"
+
+	"github.com/JaimeStill/capstone-mikoshi/data"
 )
 
 func defineInfrastructure(g *graph.Graph, n *Nodes) {
 	n.LifecycleConfig = g.Define("lifecycle config", n.newLifecycleConfig)
 	n.Logger = g.Define("logger", n.newLogger)
 	n.Database = g.Define("database", n.newDatabase)
+	n.SQL = g.Define("sql", n.newSQL)
 }
 
 func (n *Nodes) newLifecycleConfig(s *graph.Scope) (lifecycle.Config, error) {
@@ -26,4 +32,9 @@ func (n *Nodes) newLogger(s *graph.Scope) (*slog.Logger, error) {
 
 func (n *Nodes) newDatabase(s *graph.Scope) (*database.DB, error) {
 	return postgres.New(s.Use(n.Config).Database)
+}
+
+func (n *Nodes) newSQL(s *graph.Scope) (*data.Database, error) {
+	session := sqlate.Wrap(s.Use(n.Database).Conn(), pgdialect.Dialect{})
+	return data.New(session, query.MustCatalog(query.Patterns())), nil
 }
