@@ -11,27 +11,32 @@
 3. [x] contexts
 4. [x] upload
 5. [x] browser-upload
-6. [ ] items
-7. [ ] sse-codec
-8. [ ] event-extensions
-9. [ ] sse-writer
-10. [ ] go-ai-sse
-11. [ ] hybrid-search
-12. [ ] context-tools
-13. [ ] ingest
-14. [ ] standing-analyses
-15. [ ] lineage
-16. [ ] sse-event-sequence
-17. [ ] event-relay
-18. [ ] signal-flow
-19. [ ] image
-
+6. [x] items
+7. [ ] context-events
+8. [ ] sse-codec
+9. [ ] event-extensions
+10. [ ] sse-writer
+11. [ ] go-ai-sse
+12. [ ] hybrid-search
+13. [ ] context-tools
+14. [ ] ingest
+15. [ ] pgvector-types
+16. [ ] space-switch
+17. [ ] standing-analyses
+18. [ ] lineage
+19. [ ] client-design
+20. [ ] items-client
+21. [ ] sse-event-sequence
+22. [ ] event-relay
+23. [ ] signal-flow
+24. [ ] image
+25. [ ] foundation-notes
 
 ## Decisions
 
 - capstone: contracts (`chunks`, `protocol`, `events`) are designed in `.foundation` at capstone-data-intelligence; Bunrei and Mikoshi build against them, and a task that reads one opens its summary with "Waits on".
 - capstone: Bunrei's `client` module is released by tag (`client/v0.1.0` at `api`); Mikoshi imports the published version, never a replace directive.
-- capstone: go-web-sdk's resumable upload and the SSE tasks are Mikoshi's (moved from `.bunrei`, which keeps docproc, docinfer, and go-messaging); `.bunrei` `api` waits on `upload`'s release.
+- capstone: the SSE tasks are Mikoshi's (moved from `.bunrei`, which keeps docproc, docinfer, and go-messaging).
 - signal boundary: a model's token stream travels as direct SSE inside the one request that asked for it; only committed outcomes become go-messaging events (one per committed turn or analysis, with lineage); live views read events, never streams. Rejected: token deltas on go-messaging (a JetStream ack per publish, an outbox row and transaction, retention, lost cancellation).
 - SSE layering: the codec in go-core, the HTTP writer in go-web-sdk, go-ai on go-core's codec, built as Mikoshi's `sse-codec`, `sse-writer`, and `go-ai-sse` before `context-tools`, the writer's first consumer. Rejected: a Mikoshi-local relay package, tmaxmax/go-sse, r3labs/sse.
 - context-tools: SSE holds under replicas (request-scoped, no sticky sessions); settle ingress buffering and idle timeout, HTTP/2, and the drain policy for in-flight answers there.
@@ -41,15 +46,11 @@
 - store: `ingest` registers chunkers at runtime by inserting into the `chunker` table, whose surrogate ID keys each chunk.
 - store: the GIN index on the chunk's `simple` tsvector ships with the chunk table; `hybrid-search` adds no lexical index.
 - store: `hybrid-search` owns the nearest-neighbour statement.
-- store: a database reset emits no event; the messaging task adds the reset event.
 - store: currency is sqlate's shared script, verbatim.
 - store: below roughly 750–1,000 rows in space 1, the planner reads `pk_embedding` and sorts instead of scanning space 1's HNSW index, even with `enable_seqscan` off; an index proof for `hybrid-search` needs more rows (the store proof uses 2,000).
 - store: `ingest` maps docproc's empty parent and where to NULL (the columns refuse `''`), and writes a source's stage name, version, and configuration hash all or none.
 - store: the schema check caches its readiness for a few seconds, so `/readyz` trails an out-of-band schema change by that long.
-- items: plan blob reclamation, and reclamation of orphaned content-keyed sources (their chunks and embeddings), on go-database's sweeper as go-web-service's `FilesReclaimer` does (agreed at contexts' brief), and reclamation of expired uploads, which a repeated creation can leave empty (browser-upload's brief).
 - context-tools: consider a context-bound sub-agent for one-off wider analyses: a tool starts a sub-agent bound to a given context (the root included), whose cited answer is recorded with that boundary in its provenance; settle its approval, budgets, and process model there. Input for `spike-go-harness`.
-- upload: Bunrei's (`state`/`api`) and Mikoshi's (`items`) cross-replica stores are their own, proven with `uploadtest`, and arbitrate appends by a conditional commit on the expected offset. Rejected: a lock or lease per upload (a hung request blocks resumption until it times out, draft §10); a shared store now (Bunrei keeps upload state on JetStream, Mikoshi in PostgreSQL, with different retention, and no existing repository may hold one under the dependency rules), which `upload-store-graduation` revisits.
-- upload: Bunrei's and `items`' Complete functions are idempotent on the upload ID, because overlapping completing requests can each call one. Rejected: a store claim operation (it changes the approved `Store` interface).
 - browser-upload: web-app-sdk's own `./upload.js` is the draft-16 browser client, and
   `Client.upload` stays the one-request upload. Rejected: tus-js-client (it stops at draft-05 and
   sends no digests), and a method on `Client`.
@@ -61,11 +62,43 @@
   Rejected: a test server command in go-web-sdk, and tusd as the peer (v2.10.4 speaks interop
   versions 3–6 only).
 - browser-upload: `create` also repeats a creation answered 429 or 5xx, as go-web-sdk's `Client.Create` does (no behavior asked it; flagged at the session brief).
-- items: Mikoshi serves the client from the handler's origin, so the handler needs no CORS;
-  web-app-sdk's README names the headers a cross-origin server must expose.
+- items: `context-tools` adds the `analysis` item type by a migration that widens `item`'s
+  `cc_item_type` check.
+- items: `ingest` fills an item's `duration` from docproc's media metadata, and ingests a
+  record's `application/json` blob as it does a file's; a record keeps no link to the files it
+  annotates.
+- items: the covered read collects each query context's matches in Go on every request, paging
+  the item projection 500 at a time, because sqlate ANDs filters only; its cost grows with the
+  matches, and `hybrid-search` or retrieval may revisit it.
+- items: a blob reclaimer claims the row `FOR UPDATE SKIP LOCKED` and deletes the object while it
+  holds the lock, so no item names a missing object (behavior 14); `ingest`'s writes for a digest
+  respect that row's lock and `updated_at` as a create does (docs/items.md, "The blob protocol").
+- items: `ingest` writes `source_occurrence` rows keyed by `input_sha256`, which the orphan
+  reclaimer deletes by the blob's digest, with their sources and the chunks and embeddings only
+  they lead to.
+- context-events (after `items`, before `ingest`) adds go-messaging and the events of contexts'
+  and items' commands, the database reset event included; `items` emits none.
+- client: the web client's feature work holds until the services are mostly complete, so little
+  shifts beneath it. `client-design` (after `lineage`) evaluates the client's UI/UX and layout
+  holistically and names its gaps; `items-client` follows it with the browser's upload, item
+  views, and the context-tree browser. Rejected: `items-client` right after `items`.
 
 ## Pending edits
 
+- coordinator · roadmap/capstone.data-intelligence.mikoshi.toml: add `context-events` to `order`
+  after `items`, and `client-design` then `items-client` after `lineage`, with their task entries
+  (`client-design`: a holistic UI/UX and layout evaluation of the client that names its gaps;
+  `items-client`: the browser's upload, item views, and the context-tree browser); `items`' summary drops the
+  browser client and analyses and says its events move to `context-events`; `context-tools`'
+  summary gains the analysis item type.
+- capstone-data-intelligence · context/events.md, "Mikoshi's events": `context-events` names the
+  item-creation types in place of `items`; `.mikoshi`'s Ownership gains `context-events`.
+- capstone-data-intelligence · context/dataset.md: Assumptions, Mikoshi checks filter field
+  names; "What .showcase demo-load adds", records load without their `annotates` link.
+- capstone-data-intelligence · context/upload.md, Ownership: Mikoshi's store keeps chunks in
+  PostgreSQL (and roadmap/upload-store-graduation.toml notes it once created).
+- coordinator · roadmap/capstone.data-intelligence.showcase.toml: `demo-load` also waits on
+  `items-client` if the live upload uses the client.
 - coordinator · context/web-client.md (the backlog entry's summary is at its budget): add webappgen findings from web-shell's inject: when the base is `/`, `mountClient` emits both the `/` not-found branch and the `Mount` branch and a dead `strings` import; inject doesn't add `client.go` to the composition root's `doc.go` layer list; the `# Written by webappgen` header its integration test requires conflicts with comments.md; the browser tier's `ENTRY` and `RENDER_BLOCKING` constants aren't tied to the Go package's `Entry` and `RenderBlocking`; the service's check builds the client twice, and ci.yml's check job builds it again; the root `currency` doesn't run the client's (`mise -C web run currency`), so the client's pins fall behind unreported. Add a go-web-sdk-template finding too: the template ships the older 84-line `scripts/currency.sh`, without the Dockerfile scans or HOLDS; sqlate's and go-database's shared script is current; go-web-sdk also runs the older 80-line script.
 - coordinator · retro topic: settle how a document references another repository's document. lint-references can't resolve `context/chunks.md` in capstone-data-intelligence, so Mikoshi's migration headers link it by GitHub URL.
 - coordinator · roadmap/context-tree-graduation.toml: add `context = ["capstone-mikoshi/docs/contexts.md"]`, the tree's design, including the native tree lock that the library replaces with blobfs's standard-tier fallback.
