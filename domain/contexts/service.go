@@ -6,6 +6,7 @@ import (
 	"uuid"
 
 	"github.com/standards-lab/go-web-sdk"
+	"github.com/standards-lab/sqlate/query"
 
 	"github.com/JaimeStill/capstone-mikoshi/data"
 )
@@ -15,13 +16,16 @@ import (
 // delegated to the store. A command validates its input before it reaches
 // the store.
 type Service struct {
-	store *store
+	store  *store
+	fields []query.Field
 }
 
-// New constructs the service over the database the domains share.
-// Construction compiles and binds the statements and performs no I/O.
-func New(db *data.Database) *Service {
-	return &Service{store: newStore(db)}
+// New constructs the service over the database the domains share and
+// fields, the field contract a query context's filter is checked against:
+// the fields a filter may name, each with the SQL type its value is cast
+// to. Construction compiles and binds the statements and performs no I/O.
+func New(db *data.Database, fields []query.Field) *Service {
+	return &Service{store: newStore(db), fields: fields}
 }
 
 // Find returns the context with the given id, the root's included, or
@@ -51,10 +55,17 @@ func (s *Service) Children(ctx context.Context, id string, q web.Query) ([]Conte
 // service mints, and returns it as the read presents it. It takes the
 // tree lock before it reads the parent: a missing parent is
 // ErrParentNotFound, a query parent ErrQueryParent, and a name a sibling
-// holds ErrNameTaken.
+// holds ErrNameTaken. A query context's filter is checked against the
+// service's field contract before the store, a condition that does not
+// fit it ErrValidation naming the condition's index.
 func (s *Service) Create(ctx context.Context, c CreateContext) (Context, error) {
 	if err := c.Validate(); err != nil {
 		return Context{}, err
+	}
+	if c.Kind == KindQuery {
+		if err := c.Filter.Check(s.fields); err != nil {
+			return Context{}, err
+		}
 	}
 	return s.store.insert(ctx, c)
 }
@@ -103,7 +114,8 @@ func (s *Service) Move(ctx context.Context, id string, m MoveContext) (Context, 
 }
 
 // Subtree resolves the context with the given id to its subtree, the
-// context included, each node with its kind, in no stated order. A
+// context included, each node with its kind and filter, in no stated
+// order. A
 // malformed id is ErrValidation and an unknown context sql.ErrNoRows.
 func (s *Service) Subtree(ctx context.Context, id string) ([]Node, error) {
 	if _, err := uuid.Parse(id); err != nil {

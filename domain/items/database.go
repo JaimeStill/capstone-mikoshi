@@ -6,6 +6,7 @@ import (
 	"embed"
 	"errors"
 	"fmt"
+	"slices"
 	"uuid"
 
 	"github.com/standards-lab/go-storage"
@@ -26,6 +27,7 @@ type store struct {
 	findRows    query.Rows[Item]
 	uploadRows  query.Rows[Item]
 	list        query.Projection[Item]
+	covered     query.Projection[Item]
 	create      query.Returning[Item]
 	touchBlob   query.Returning[blobRow]
 	createBlob  query.Statement
@@ -44,6 +46,7 @@ func newStore(db *data.Database, objects *storage.Store) *store {
 		findRows:    stmts.Statement("find").Scan(scan),
 		uploadRows:  stmts.Statement("find_upload").Scan(scan),
 		list:        stmts.Statement("list").Project(scan),
+		covered:     stmts.Statement("covered").Project(scan),
 		create:      stmts.Statement("create").Returning(scan),
 		touchBlob:   stmts.Statement("touch_blob").Returning(query.Scanner[blobRow]()),
 		createBlob:  stmts.Statement("create_blob"),
@@ -55,11 +58,18 @@ func newStore(db *data.Database, objects *storage.Store) *store {
 	return s
 }
 
-// Verify prepares every statement and the list projection's field
-// contract against the live schema over sess, making the store a
+// Verify prepares every statement and the list and covered projections'
+// field contracts against the live schema over sess, making the store a
 // query.Verifier.
 func (s *store) Verify(ctx context.Context, sess sqlate.Session) error {
-	return query.Verify(ctx, sess, s.stmts, s.list)
+	return query.Verify(ctx, sess, s.stmts, s.list, s.covered)
+}
+
+func filterFields(db *data.Database) []query.Field {
+	list := db.Catalog.MustCompile(files, "statements", db.Dialect()).Statement("list")
+	return slices.DeleteFunc(list.Fields(), func(f query.Field) bool {
+		return slices.Contains(list.Keys(), f.Name)
+	})
 }
 
 func (s *store) find(ctx context.Context, id string) (Item, error) {
@@ -71,14 +81,42 @@ func (s *store) byUpload(ctx context.Context, uploadID string) (Item, error) {
 }
 
 func (s *store) page(ctx context.Context, q web.Query) ([]Item, web.Paging, error) {
+	return read(ctx, s.db, s.list, q)
+}
+
+const matchPageSize = 500
+
+func (s *store) matching(ctx context.Context, filters []query.Filter) ([]string, error) {
+	d := query.Directives{Filters: filters, Total: query.TotalNone}
+	var ids []string
+	c, err := s.list.List(ctx, s.db, d, query.Page{Number: 1, Size: matchPageSize})
+	for {
+		if err != nil {
+			return nil, err
+		}
+		for _, item := range c.Items {
+			ids = append(ids, item.ID)
+		}
+		if c.Next == "" {
+			return ids, nil
+		}
+		c, err = s.list.Continue(ctx, s.db, d, c.Next, matchPageSize)
+	}
+}
+
+func (s *store) pageCovered(ctx context.Context, contexts, matches []string, q web.Query) ([]Item, web.Paging, error) {
+	return read(ctx, s.db, s.covered, q, query.Args{"contexts": contexts, "matches": matches})
+}
+
+func read(ctx context.Context, db *data.Database, view query.Projection[Item], q web.Query, base ...query.Args) ([]Item, web.Paging, error) {
 	var (
 		c   query.Collection[Item]
 		err error
 	)
 	if q.Cursor != "" {
-		c, err = s.list.Continue(ctx, s.db, query.Directives{}, query.Cursor(q.Cursor), q.Size)
+		c, err = view.Continue(ctx, db, query.Directives{}, query.Cursor(q.Cursor), q.Size, base...)
 	} else {
-		c, err = s.list.List(ctx, s.db, query.Directives{}, query.Page{Number: q.Page, Size: q.Size})
+		c, err = view.List(ctx, db, query.Directives{}, query.Page{Number: q.Page, Size: q.Size}, base...)
 	}
 	if err != nil {
 		return nil, web.Paging{}, err

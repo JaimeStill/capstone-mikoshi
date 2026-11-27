@@ -23,7 +23,8 @@ func defineDomain(g *graph.Graph, n *Nodes) {
 }
 
 func (n *Nodes) newContexts(s *graph.Scope) (*contexts.Service, error) {
-	return contexts.New(s.Use(n.SQL)), nil
+	db := s.Use(n.SQL)
+	return contexts.New(db, items.FilterFields(db)), nil
 }
 
 func (n *Nodes) newUploads(s *graph.Scope) (*uploads.Service, error) {
@@ -44,7 +45,7 @@ func mountAPI(s *graph.Scope, n *Nodes) *web.Group {
 	transfer := cfg.Server.Transfer(*cfg.Uploads.MaxAppendSize)
 	api.Mount(contexts.Routes(s.Use(n.Contexts), reads, logger))
 	api.Mount(items.Routes(itemService, reads, transfer, logger))
-	api.Mount(items.ReferenceRoutes(itemService, logger))
+	api.Mount(items.ReferenceRoutes(itemService, reads, logger))
 	api.Mount(upload.Handler{
 		Store:    s.Use(n.Uploads),
 		Transfer: transfer,

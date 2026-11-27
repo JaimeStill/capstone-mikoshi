@@ -25,6 +25,7 @@ import (
 
 	"github.com/JaimeStill/capstone-mikoshi/data"
 	"github.com/JaimeStill/capstone-mikoshi/domain/contexts"
+	"github.com/JaimeStill/capstone-mikoshi/domain/items"
 	"github.com/JaimeStill/capstone-mikoshi/integration"
 )
 
@@ -57,7 +58,7 @@ func TestContexts_RootReadableAtTheNilUUID(t *testing.T) {
 
 func TestContexts_CreateAndReadBack(t *testing.T) {
 	c := integration.Start(t, integration.Options{}).Client()
-	filter := `[{"field":"media_type","op":"eq","value":"application/pdf"},{"field":"size","op":"in","value":[1,2]},{"field":"title","op":"notnull"}]`
+	filter := `[{"field":"kind","op":"eq","value":"pdf"},{"field":"duration","op":"in","value":[1,2]},{"field":"route","op":"notnull"}]`
 
 	before := time.Now().UTC().Add(-time.Minute)
 	top := createContext(t, c, explicit(contexts.Root, "projects"))
@@ -126,7 +127,7 @@ func TestContexts_SiblingNameConflicts(t *testing.T) {
 	c := integration.Start(t, integration.Options{}).Client()
 
 	first := createContext(t, c, explicit(contexts.Root, "shared"))
-	p := c.Post(t, "/api/contexts", queryContext(contexts.Root, "shared", `[{"field":"a","op":"null"}]`)).Problem(t, http.StatusConflict)
+	p := c.Post(t, "/api/contexts", queryContext(contexts.Root, "shared", `[{"field":"kind","op":"null"}]`)).Problem(t, http.StatusConflict)
 	if p.Detail != contexts.ErrNameTaken.Error() {
 		t.Errorf("detail = %q, want %q", p.Detail, contexts.ErrNameTaken.Error())
 	}
@@ -157,10 +158,10 @@ func TestContexts_ReadRefusesMalformedAndUnknownIDs(t *testing.T) {
 func TestContexts_CreateUnderAQueryContextRefused(t *testing.T) {
 	c := integration.Start(t, integration.Options{}).Client()
 
-	saved := createContext(t, c, queryContext(contexts.Root, "pdfs", `[{"field":"a","op":"eq","value":1}]`))
+	saved := createContext(t, c, queryContext(contexts.Root, "pdfs", `[{"field":"duration","op":"eq","value":1}]`))
 	for _, body := range []string{
 		explicit(saved.ID, "under"),
-		queryContext(saved.ID, "under", `[{"field":"a","op":"eq","value":1}]`),
+		queryContext(saved.ID, "under", `[{"field":"duration","op":"eq","value":1}]`),
 	} {
 		p := c.Post(t, "/api/contexts", body).Problem(t, http.StatusConflict)
 		if p.Detail != contexts.ErrQueryParent.Error() {
@@ -178,14 +179,19 @@ func TestContexts_MalformedInputRefused(t *testing.T) {
 		{"a malformed parent", explicit("x", "e"), "parent_id must be a UUID"},
 		{"an empty name", explicit(contexts.Root, ""), "name must not be empty"},
 		{"an unknown kind", `{"parent_id":"` + contexts.Root + `","name":"e","kind":"saved"}`, "kind must be"},
-		{"an explicit context's filter", `{"parent_id":"` + contexts.Root + `","name":"e","kind":"explicit","filter":[{"field":"a","op":"null"}]}`, "an explicit context carries no filter"},
+		{"an explicit context's filter", `{"parent_id":"` + contexts.Root + `","name":"e","kind":"explicit","filter":[{"field":"kind","op":"null"}]}`, "an explicit context carries no filter"},
 		{"a query context without a filter", `{"parent_id":"` + contexts.Root + `","name":"q","kind":"query"}`, "a query context requires a filter"},
 		{"an empty filter", queryContext(contexts.Root, "q", `[]`), "filter must hold at least one condition"},
-		{"an empty field", queryContext(contexts.Root, "q", `[{"field":"a","op":"null"},{"field":"","op":"eq","value":1}]`), "filter[1]: field must not be empty"},
+		{"an empty field", queryContext(contexts.Root, "q", `[{"field":"kind","op":"null"},{"field":"","op":"eq","value":1}]`), "filter[1]: field must not be empty"},
 		{"an unknown op", queryContext(contexts.Root, "q", `[{"field":"a","op":"between","value":1}]`), `filter[0]: op "between" is not one of`},
 		{"in without a list", queryContext(contexts.Root, "q", `[{"field":"a","op":"in","value":1}]`), `filter[0]: op "in" takes a non-empty list`},
 		{"null with a value", queryContext(contexts.Root, "q", `[{"field":"a","op":"null","value":1}]`), `filter[0]: op "null" takes no value`},
 		{"eq without a value", queryContext(contexts.Root, "q", `[{"field":"a","op":"eq"}]`), `filter[0]: op "eq" takes exactly one value`},
+		{"a field the item read does not declare", queryContext(contexts.Root, "q", `[{"field":"route","op":"eq","value":"video"},{"field":"media_type","op":"eq","value":"video/mp4"}]`), `filter[1]: query: unknown filter field "media_type"`},
+		{"the item read's key", queryContext(contexts.Root, "q", `[{"field":"id","op":"notnull"}]`), `filter[0]: query: unknown filter field "id"`},
+		{"a non-number duration", queryContext(contexts.Root, "q", `[{"field":"duration","op":"gt","value":"120"}]`), `filter[0]: query: invalid value for "duration"`},
+		{"a non-string route", queryContext(contexts.Root, "q", `[{"field":"route","op":"in","value":["video",1]}]`), `filter[0]: query: invalid value for "route"`},
+		{"like on duration", queryContext(contexts.Root, "q", `[{"field":"duration","op":"like","value":"1%"}]`), `filter[0]: query: invalid value for "duration"`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -205,7 +211,7 @@ func TestContexts_SchemaHoldsTheTreeRules(t *testing.T) {
 		name, constraint, query string
 	}{
 		{"an explicit context with a filter", "cc_context_filter",
-			`INSERT INTO context (id, parent_id, name, kind, filter) VALUES ('0190a5d1-7a2b-7c3d-8e4f-000000000001', '` + contexts.Root + `', 'e', 'explicit', '[{"field":"a","op":"null"}]')`},
+			`INSERT INTO context (id, parent_id, name, kind, filter) VALUES ('0190a5d1-7a2b-7c3d-8e4f-000000000001', '` + contexts.Root + `', 'e', 'explicit', '[{"field":"kind","op":"null"}]')`},
 		{"a query context without a filter", "cc_context_filter",
 			`INSERT INTO context (id, parent_id, name, kind) VALUES ('0190a5d1-7a2b-7c3d-8e4f-000000000001', '` + contexts.Root + `', 'q', 'query')`},
 		{"a query context with an empty filter", "cc_context_filter_list",
@@ -244,7 +250,7 @@ func TestContexts_ChildrenPagedByName(t *testing.T) {
 	folder := createContext(t, c, explicit(contexts.Root, "folder"))
 	for _, body := range []string{
 		explicit(folder.ID, "c"), explicit(folder.ID, "a"),
-		queryContext(folder.ID, "e", `[{"field":"a","op":"null"}]`),
+		queryContext(folder.ID, "e", `[{"field":"kind","op":"null"}]`),
 		explicit(folder.ID, "b"), explicit(folder.ID, "d"),
 	} {
 		createContext(t, c, body)
@@ -297,7 +303,7 @@ func TestContexts_ChildrenPagedByName(t *testing.T) {
 func TestContexts_ChildrenOfALeafIsAnEmptyPage(t *testing.T) {
 	c := integration.Start(t, integration.Options{}).Client()
 
-	saved := createContext(t, c, queryContext(contexts.Root, "pdfs", `[{"field":"a","op":"null"}]`))
+	saved := createContext(t, c, queryContext(contexts.Root, "pdfs", `[{"field":"kind","op":"null"}]`))
 	res := c.Get(t, "/api/contexts/"+saved.ID+"/children").Expect(t, http.StatusOK)
 	var p web.Page[contexts.Context]
 	res.JSON(t, &p)
@@ -384,7 +390,8 @@ func domainService(t *testing.T) (*contexts.Service, *pgtest.Database, *webtest.
 	t.Helper()
 	db := integration.Database(t)
 	c := integration.Start(t, integration.Options{Database: db}).Client()
-	return contexts.New(data.New(db.Session(), query.MustCatalog(query.Patterns()))), db, c
+	d := data.New(db.Session(), query.MustCatalog(query.Patterns()))
+	return contexts.New(d, items.FilterFields(d)), db, c
 }
 
 func move(t *testing.T, c *webtest.Client, id, body string) contexts.Context {
@@ -417,7 +424,7 @@ func TestContexts_MoveCarriesTheSubtree(t *testing.T) {
 	to := createContext(t, c, explicit(contexts.Root, "to"))
 	moved := createContext(t, c, explicit(from.ID, "moved"))
 	grandchild := createContext(t, c, explicit(moved.ID, "grandchild"))
-	leaf := createContext(t, c, queryContext(moved.ID, "leaf", `[{"field":"a","op":"null"}]`))
+	leaf := createContext(t, c, queryContext(moved.ID, "leaf", `[{"field":"kind","op":"null"}]`))
 	deep := createContext(t, c, explicit(grandchild.ID, "deep"))
 
 	got := move(t, c, moved.ID, moveTo(to.ID))
@@ -484,7 +491,7 @@ func TestContexts_MoveRefusals(t *testing.T) {
 	folder := createContext(t, c, explicit(contexts.Root, "folder"))
 	child := createContext(t, c, explicit(folder.ID, "child"))
 	grandchild := createContext(t, c, explicit(child.ID, "grandchild"))
-	saved := createContext(t, c, queryContext(contexts.Root, "saved", `[{"field":"a","op":"null"}]`))
+	saved := createContext(t, c, queryContext(contexts.Root, "saved", `[{"field":"kind","op":"null"}]`))
 	createContext(t, c, explicit(contexts.Root, "taken"))
 	missing := uuid.NewV7().String()
 
@@ -542,7 +549,7 @@ func TestContexts_SubtreeResolution(t *testing.T) {
 
 	folder := createContext(t, c, explicit(contexts.Root, "folder"))
 	leaf := createContext(t, c, explicit(folder.ID, "leaf"))
-	saved := createContext(t, c, queryContext(folder.ID, "saved", `[{"field":"a","op":"null"}]`))
+	saved := createContext(t, c, queryContext(folder.ID, "saved", `[{"field":"kind","op":"null"}]`))
 
 	if got := subtree(t, s, leaf.ID); !maps.Equal(got, map[string]contexts.Kind{leaf.ID: contexts.KindExplicit}) {
 		t.Errorf("subtree of an explicit leaf = %v, want it alone", got)
@@ -677,7 +684,7 @@ func TestContexts_DeleteALeafOnTheFirstRequest(t *testing.T) {
 
 	folder := createContext(t, c, explicit(contexts.Root, "folder"))
 	leaf := createContext(t, c, explicit(folder.ID, "leaf"))
-	saved := createContext(t, c, queryContext(folder.ID, "saved", `[{"field":"a","op":"null"}]`))
+	saved := createContext(t, c, queryContext(folder.ID, "saved", `[{"field":"kind","op":"null"}]`))
 	kept := createContext(t, c, explicit(folder.ID, "kept"))
 
 	if res := c.Delete(t, "/api/contexts/"+leaf.ID).Expect(t, http.StatusNoContent); len(res.Body) != 0 {
@@ -700,7 +707,7 @@ func TestContexts_DeleteASubtreeOnConfirmation(t *testing.T) {
 
 	folder := createContext(t, c, explicit(contexts.Root, "folder"))
 	child := createContext(t, c, explicit(folder.ID, "child"))
-	saved := createContext(t, c, queryContext(folder.ID, "saved", `[{"field":"a","op":"null"}]`))
+	saved := createContext(t, c, queryContext(folder.ID, "saved", `[{"field":"kind","op":"null"}]`))
 	grandchild := createContext(t, c, explicit(child.ID, "grandchild"))
 	deep := createContext(t, c, explicit(grandchild.ID, "deep"))
 	sibling := createContext(t, c, explicit(contexts.Root, "sibling"))

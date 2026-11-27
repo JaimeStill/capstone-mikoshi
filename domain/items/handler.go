@@ -48,17 +48,20 @@ func Routes(service *Service, limits web.Limits, records web.Transfer, logger *s
 
 // ReferenceRoutes builds the layer's second route group, /contexts, which
 // the composition root mounts beside the contexts layer's group of the
-// same prefix: the placing of an item in a context, a PUT of
-// /{id}/items/{item}, and the withdrawing of its reference, a DELETE of the
-// same path, each answering 204 whether or not the reference was in place
-// before. logger records the cause of every 5xx the group's error writer
-// sends. Every refusal is a problem response: a malformed id a 400, an
-// unknown context or item a 404, a query context a 409, and an unreachable
+// same prefix: the paged read of the items a context covers, a GET of
+// /{id}/items under limits; the placing of an item in a context, a PUT of
+// /{id}/items/{item}; and the withdrawing of its reference, a DELETE of
+// the same path, each answering 204 whether or not the reference was in
+// place before. logger records the cause of every 5xx the group's error
+// writer sends. Every refusal is a problem response: a malformed id, a
+// sort or filter, or a cursor the read did not issue a 400, an unknown
+// context or item a 404, a query context a 409, and an unreachable
 // database a 503.
-func ReferenceRoutes(service *Service, logger *slog.Logger) *web.Group {
-	h := &handler{service: service}
+func ReferenceRoutes(service *Service, limits web.Limits, logger *slog.Logger) *web.Group {
+	h := &handler{service: service, limits: limits}
 	g := web.NewGroup("/contexts")
 	g.SetErrorWriter(web.NewErrorWriter(logger, status))
+	g.HandleErr("GET", "/{id}/items", h.covered)
 	g.HandleErr("PUT", "/{id}/items/{item}", h.place)
 	g.HandleErr("DELETE", "/{id}/items/{item}", h.withdraw)
 	return g
@@ -146,6 +149,22 @@ func (h *handler) list(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	items, paging, err := h.service.List(r.Context(), q)
+	if err != nil {
+		return err
+	}
+	return web.WriteJSON(w, http.StatusOK, web.NewPage(items, q, paging))
+}
+
+func (h *handler) covered(w http.ResponseWriter, r *http.Request) error {
+	id, err := web.PathUUID(r, "id")
+	if err != nil {
+		return err
+	}
+	q, err := web.ParseQuery(r.URL.Query(), h.limits)
+	if err != nil {
+		return err
+	}
+	items, paging, err := h.service.Covered(r.Context(), id, q)
 	if err != nil {
 		return err
 	}

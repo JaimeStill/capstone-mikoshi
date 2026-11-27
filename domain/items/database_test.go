@@ -9,7 +9,9 @@ import (
 	"database/sql/driver"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -61,7 +63,7 @@ func service(t *testing.T, responses ...sqltest.Response) fixture {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = objects.Shutdown(context.Background()) })
-	return fixture{service: items.New(db, objects, contexts.New(db)), rec: rec, fake: fake}
+	return fixture{service: items.New(db, objects, contexts.New(db, items.FilterFields(db))), rec: rec, fake: fake}
 }
 
 func digest(content []byte) string {
@@ -683,6 +685,135 @@ func TestService_ListRefusals(t *testing.T) {
 	}
 }
 
+func subtree(rows ...[]driver.Value) sqltest.Response {
+	return sqltest.Response{Columns: []string{"id", "kind", "filter"}, Rows: rows}
+}
+
+func TestService_CoveredGathersEachFiltersMatchesThenPagesTheCoveredItems(t *testing.T) {
+	a, b, c := itemID[:len(itemID)-1]+"a", itemID[:len(itemID)-1]+"b", itemID[:len(itemID)-1]+"c"
+	childID := contextID[:len(contextID)-1] + "f"
+	video, audio := contextID[:len(contextID)-1]+"1", contextID[:len(contextID)-1]+"2"
+	f := service(t,
+		subtree(
+			[]driver.Value{contextID, "explicit", nil},
+			[]driver.Value{childID, "explicit", nil},
+			[]driver.Value{video, "query", []byte(`[{"field":"route","op":"eq","value":"video"}]`)},
+			[]driver.Value{audio, "query", []byte(`[{"field":"route","op":"in","value":["audio","video"]},{"field":"duration","op":"gt","value":120}]`)},
+		),
+		page(a),
+		page(b),
+		sqltest.WithTotal(page(a, b, c), 3),
+	)
+	got, paging, err := f.service.Covered(t.Context(), contextID, web.Query{Page: 1, Size: 2, Filters: []web.Filter{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].ID != a || got[1].ID != b || !paging.More || paging.Next == "" || paging.Total == nil || *paging.Total != 3 {
+		t.Fatalf("page = %+v, %+v, want a and b with a further page, a cursor, and a total of 3", got, paging)
+	}
+	sameOps(t, f.rec, q, q, q, q)
+	calls := f.rec.Calls()
+	if walk := calls[0]; !strings.HasPrefix(walk.SQL, "WITH RECURSIVE down") || walk.Args[0] != contextID {
+		t.Errorf("subtree = %+v", walk)
+	}
+	if m := calls[1]; !strings.Contains(m.SQL, "q.route = CAST($1 AS text)") || m.Args[0] != "video" {
+		t.Errorf("first filter's read = %+v, want route eq video over the list read", m)
+	}
+	if m := calls[2]; !strings.Contains(m.SQL, "q.route IN (CAST($1 AS text), CAST($2 AS text)) AND q.duration > CAST($3 AS double precision)") || m.Args[2] != float64(120) {
+		t.Errorf("second filter's read = %+v, want route in audio, video and duration gt 120", m)
+	}
+	read := calls[3]
+	if !strings.Contains(read.SQL, "FROM context_item") || !strings.Contains(read.SQL, "ORDER BY q.id") {
+		t.Errorf("covered read = %q, want the references and the matches ordered by id", read.SQL)
+	}
+	if contexts, matches := read.Args[0], read.Args[1]; !reflect.DeepEqual(contexts, []string{contextID, childID}) || !reflect.DeepEqual(matches, []string{a, b}) {
+		t.Errorf("covered read args = %v, want the explicit contexts and every filter's matches", read.Args)
+	}
+
+	f.rec.Queue(subtree([]driver.Value{contextID, "explicit", nil}), sqltest.WithTotal(page(c), 3))
+	got, paging, err = f.service.Covered(t.Context(), contextID, web.Query{Size: 2, Cursor: paging.Next, Filters: []web.Filter{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].ID != c || paging.More {
+		t.Errorf("continued page = %+v, %+v, want c and no further page", got, paging)
+	}
+	if read := f.rec.Calls()[5]; !slices.Contains(read.Args, any(b)) {
+		t.Errorf("continued read args = %v, want it past the first page's last id", read.Args)
+	}
+}
+
+func TestService_CoveredReadsEveryPageOfAFiltersMatches(t *testing.T) {
+	matches := sqltest.Response{Columns: itemColumns}
+	for i := range 501 {
+		matches.Rows = append(matches.Rows, page(fmt.Sprintf("0190a5d1-7a2b-7c3d-8e4f-%012d", i)).Rows[0])
+	}
+	f := service(t,
+		subtree([]driver.Value{contextID, "query", []byte(`[{"field":"kind","op":"null"}]`)}),
+		matches,
+		page("0190a5d1-7a2b-7c3d-8e4f-100000000000"),
+		sqltest.WithTotal(page(itemID), 502),
+	)
+	if _, _, err := f.service.Covered(t.Context(), contextID, web.Query{Page: 1, Size: 1, Filters: []web.Filter{}}); err != nil {
+		t.Fatal(err)
+	}
+	calls := f.rec.Calls()
+	if len(calls) != 4 {
+		t.Fatalf("calls = %d, want the subtree, two pages of matches, and the covered read", len(calls))
+	}
+	if matched := calls[3].Args[1].([]string); len(matched) != 501 {
+		t.Errorf("matches = %d, want both pages' 501", len(matched))
+	}
+}
+
+func TestService_CoveredRefusals(t *testing.T) {
+	cases := []struct {
+		name      string
+		contextID string
+		query     web.Query
+		responses []sqltest.Response
+		want      error
+		ops       []sqltest.Op
+	}{
+		{"a malformed id", "x", web.Query{Page: 1, Size: 5}, nil, items.ErrValidation, nil},
+		{"a sort", contextID, web.Query{Page: 1, Size: 5, Sort: []web.Sort{{Field: "route"}}}, nil, items.ErrValidation, nil},
+		{"a filter", contextID, web.Query{Page: 1, Size: 5, Filters: []web.Filter{{Field: "route", Values: []string{"text"}}}}, nil, items.ErrValidation, nil},
+		{"an unknown context", contextID, web.Query{Page: 1, Size: 5}, []sqltest.Response{subtree()}, items.ErrContextNotFound, []sqltest.Op{q}},
+		{"a foreign cursor", contextID, web.Query{Size: 5, Cursor: "not-a-cursor"}, []sqltest.Response{subtree([]driver.Value{contextID, "explicit", nil})}, query.ErrDirectives, []sqltest.Op{q}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f := service(t, c.responses...)
+			if _, _, err := f.service.Covered(t.Context(), c.contextID, c.query); !errors.Is(err, c.want) {
+				t.Errorf("Covered = %v, want %v", err, c.want)
+			}
+			sameOps(t, f.rec, c.ops...)
+		})
+	}
+}
+
+func TestService_CoveredOverAStoredFilterTheContractRefusesIsAServerError(t *testing.T) {
+	f := service(t, subtree([]driver.Value{contextID, "query", []byte(`[{"field":"title","op":"null"}]`)}))
+	_, _, err := f.service.Covered(t.Context(), contextID, web.Query{Page: 1, Size: 5})
+	if err == nil || errors.Is(err, query.ErrDirectives) || errors.Is(err, items.ErrValidation) || !strings.Contains(err.Error(), contextID) {
+		t.Errorf("Covered = %v, want an error naming the context that is not a request's refusal", err)
+	}
+	sameOps(t, f.rec, q)
+}
+
+func TestFilterFields_AreTheListContractLessItsKey(t *testing.T) {
+	pool, _ := sqltest.Open(t)
+	db := data.New(sqlate.Wrap(pool, sqltest.ReturningDialect{}), query.MustCatalog(query.Patterns()))
+	want := []query.Field{
+		{Name: "route", Type: "text", NotNull: true},
+		{Name: "kind", Type: "text"},
+		{Name: "duration", Type: "double precision"},
+	}
+	if got := items.FilterFields(db); !slices.Equal(got, want) {
+		t.Errorf("FilterFields = %+v, want %+v", got, want)
+	}
+}
+
 func TestStore_RegistersAndVerifiesEveryStatement(t *testing.T) {
 	pool, rec := sqltest.Open(t)
 	db := data.New(sqlate.Wrap(pool, sqltest.ReturningDialect{}), query.MustCatalog(query.Patterns()))
@@ -690,7 +821,7 @@ func TestStore_RegistersAndVerifiesEveryStatement(t *testing.T) {
 		cfg := storage.Config{Container: "items"}
 		_ = cfg.Finalize("")
 		return cfg
-	}()), contexts.New(db))
+	}()), contexts.New(db, items.FilterFields(db)))
 
 	var entry *query.Statements
 	for _, e := range db.Registry() {

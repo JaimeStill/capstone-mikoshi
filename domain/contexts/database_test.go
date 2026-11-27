@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"errors"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -34,7 +35,13 @@ func service(t *testing.T, responses ...sqltest.Response) (*contexts.Service, *s
 	t.Helper()
 	pool, rec := sqltest.Open(t, responses...)
 	db := data.New(sqlate.Wrap(pool, sqltest.ReturningDialect{}), query.MustCatalog(query.Patterns()))
-	return contexts.New(db), rec
+	return contexts.New(db, fields), rec
+}
+
+var fields = []query.Field{
+	{Name: "route", Type: "text", NotNull: true},
+	{Name: "kind", Type: "text"},
+	{Name: "duration", Type: "double precision"},
 }
 
 func row(id string, parent driver.Value, name string, kind contexts.Kind, filter driver.Value) sqltest.Response {
@@ -162,6 +169,21 @@ func TestService_CreateValidatesBeforeTheStore(t *testing.T) {
 	_, err := s.Create(context.Background(), contexts.CreateContext{ParentID: contexts.Root, Name: "", Kind: contexts.KindExplicit})
 	if !errors.Is(err, contexts.ErrValidation) {
 		t.Errorf("Create = %v, want ErrValidation", err)
+	}
+	sameOps(t, rec)
+}
+
+func TestService_CreateChecksTheFilterAgainstTheContractBeforeTheStore(t *testing.T) {
+	s, rec := service(t)
+	_, err := s.Create(context.Background(), contexts.CreateContext{
+		ParentID: contexts.Root, Name: "q", Kind: contexts.KindQuery,
+		Filter: contexts.Filter{
+			{Field: "route", Op: query.OpEq, Value: []byte(`"video"`)},
+			{Field: "title", Op: query.OpIsNull},
+		},
+	})
+	if !errors.Is(err, contexts.ErrValidation) || !strings.Contains(err.Error(), `filter[1]: query: unknown filter field "title"`) {
+		t.Errorf("Create = %v, want ErrValidation naming filter[1]'s field", err)
 	}
 	sameOps(t, rec)
 }
@@ -399,15 +421,18 @@ func TestService_MoveRefusals(t *testing.T) {
 
 func TestService_SubtreeWalksDownFromTheContext(t *testing.T) {
 	s, rec := service(t, sqltest.Response{
-		Columns: []string{"id", "kind"},
-		Rows:    [][]driver.Value{{childID, "explicit"}, {parentID, "query"}},
+		Columns: []string{"id", "kind", "filter"},
+		Rows:    [][]driver.Value{{childID, "explicit", nil}, {parentID, "query", []byte(`[{"field":"route","op":"eq","value":"video"}]`)}},
 	})
 	nodes, err := s.Subtree(context.Background(), childID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []contexts.Node{{ID: childID, Kind: contexts.KindExplicit}, {ID: parentID, Kind: contexts.KindQuery}}
-	if !slices.Equal(nodes, want) {
+	want := []contexts.Node{
+		{ID: childID, Kind: contexts.KindExplicit},
+		{ID: parentID, Kind: contexts.KindQuery, Filter: contexts.Filter{{Field: "route", Op: query.OpEq, Value: []byte(`"video"`)}}},
+	}
+	if !reflect.DeepEqual(nodes, want) {
 		t.Errorf("Subtree = %+v, want %+v", nodes, want)
 	}
 	if walk := rec.Calls()[0]; !strings.HasPrefix(walk.SQL, "WITH RECURSIVE down") || walk.Args[0] != childID {
@@ -422,7 +447,7 @@ func TestService_SubtreeRefusals(t *testing.T) {
 	}
 	sameOps(t, rec)
 
-	s, _ = service(t, sqltest.Response{Columns: []string{"id", "kind"}})
+	s, _ = service(t, sqltest.Response{Columns: []string{"id", "kind", "filter"}})
 	if _, err := s.Subtree(context.Background(), childID); !errors.Is(err, sql.ErrNoRows) {
 		t.Errorf("Subtree = %v, want sql.ErrNoRows", err)
 	}
@@ -495,7 +520,7 @@ func TestService_DeleteRefusals(t *testing.T) {
 func TestStore_RegistersAndVerifiesEveryStatement(t *testing.T) {
 	pool, rec := sqltest.Open(t)
 	db := data.New(sqlate.Wrap(pool, sqltest.ReturningDialect{}), query.MustCatalog(query.Patterns()))
-	contexts.New(db)
+	contexts.New(db, fields)
 
 	var entry *query.Statements
 	for _, e := range db.Registry() {
@@ -530,11 +555,11 @@ func TestStore_RegistersAndVerifiesEveryStatement(t *testing.T) {
 func TestNew_TwiceOverOneDatabaseIsAWiringDefect(t *testing.T) {
 	pool, _ := sqltest.Open(t)
 	db := data.New(sqlate.Wrap(pool, sqltest.ReturningDialect{}), query.MustCatalog(query.Patterns()))
-	contexts.New(db)
+	contexts.New(db, fields)
 	defer func() {
 		if recover() == nil {
 			t.Fatal("a second contexts service registered its statements again")
 		}
 	}()
-	contexts.New(db)
+	contexts.New(db, fields)
 }

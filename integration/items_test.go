@@ -467,7 +467,7 @@ func itemService(t *testing.T) (*items.Service, *pgtest.Database) {
 	t.Helper()
 	db := integration.Migrated(t)
 	d := data.New(db.Session(), query.MustCatalog(query.Patterns()))
-	s := items.New(d, integration.Objects(t, bucketName()), contexts.New(d))
+	s := items.New(d, integration.Objects(t, bucketName()), contexts.New(d, items.FilterFields(d)))
 	if err := d.Verify(t.Context()); err != nil {
 		t.Fatalf("verify the items statements: %v", err)
 	}
@@ -764,6 +764,151 @@ func TestItems_SchemaHoldsTheReferenceRules(t *testing.T) {
 		_, err := db.Pool.ExecContext(ctx, r.query)
 		if want := `constraint "` + r.constraint + `"`; err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("%s = %v, want it refused by %s", r.name, err, r.constraint)
+		}
+	}
+}
+
+func coveredPath(contextID string) string {
+	return "/api/contexts/" + contextID + "/items"
+}
+
+func covered(t *testing.T, c *webtest.Client, contextID string) []string {
+	t.Helper()
+	page := webtest.Decode[web.Page[items.Item]](t, c.Get(t, coveredPath(contextID)+"?size=100"), http.StatusOK)
+	if page.More {
+		t.Fatalf("%s: a further page, want every covered item on one", contextID)
+	}
+	return itemIDs(page.Items)
+}
+
+func sortedIDs(list ...items.Item) []string {
+	return slices.Sorted(slices.Values(itemIDs(list)))
+}
+
+func mp4Of(seed string) []byte {
+	return append([]byte("\x00\x00\x00\x18ftypisom\x00\x00\x02\x00isomiso2"), []byte(seed)...)
+}
+
+func TestItems_ContextCoversItsSubtreesReferencesAndQueryMatches(t *testing.T) {
+	db := integration.Database(t)
+	s := integration.Start(t, integration.Options{Database: db, Env: []string{"MIKOSHI_STORAGE_CONTAINER=" + bucketName()}})
+	c := s.Client()
+	clip := uploadFile(t, s, nil, 0, "clip.mp4", "video/mp4", mp4Of("clip"))
+	film := uploadFile(t, s, nil, 0, "film.mp4", "video/mp4", mp4Of("film"))
+	talk := uploadFile(t, s, nil, 0, "talk.wav", "audio/wav", append([]byte("RIFF\x64\x00\x00\x00WAVEfmt "), make([]byte, 32)...))
+	photo := uploadFile(t, s, nil, 0, "photo.png", "image/png", append([]byte("\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR"), make([]byte, 32)...))
+	notes := uploadFile(t, s, nil, 0, "notes.txt", "text/plain", []byte("notes\n"))
+	record := postRecord(t, c, "record")
+	loose := postRecord(t, c, "loose")
+	for item, want := range map[*items.Item]string{&clip: "video", &film: "video", &talk: "audio", &photo: "vision", &notes: "text", &record: "text"} {
+		if item.Route != want {
+			t.Fatalf("%s's route = %q, want %q", item.Name, item.Route, want)
+		}
+	}
+
+	library := createContext(t, c, explicit(contexts.Root, "library"))
+	shelf := createContext(t, c, explicit(library.ID, "shelf"))
+	box := createContext(t, c, explicit(shelf.ID, "box"))
+	videos := createContext(t, c, queryContext(shelf.ID, "videos", `[{"field":"route","op":"eq","value":"video"}]`))
+	long := createContext(t, c, queryContext(library.ID, "long", `[{"field":"route","op":"in","value":["audio","video"]},{"field":"duration","op":"gt","value":120}]`))
+	pictures := createContext(t, c, queryContext(contexts.Root, "pictures", `[{"field":"route","op":"in","value":["vision","vision-converted"]}]`))
+	elsewhere := createContext(t, c, explicit(contexts.Root, "elsewhere"))
+	for _, ref := range []struct{ context, item string }{
+		{library.ID, notes.ID},
+		{shelf.ID, record.ID},
+		{shelf.ID, clip.ID},
+		{box.ID, notes.ID},
+		{box.ID, photo.ID},
+		{elsewhere.ID, loose.ID},
+	} {
+		c.Put(t, referencePath(ref.context, ref.item), nil).Expect(t, http.StatusNoContent)
+	}
+
+	cases := []struct {
+		name    string
+		context string
+		want    []string
+	}{
+		{"the root", contexts.Root, sortedIDs(clip, film, photo, notes, record, loose)},
+		{"an explicit parent", library.ID, sortedIDs(clip, film, photo, notes, record)},
+		{"an explicit child", shelf.ID, sortedIDs(clip, film, photo, notes, record)},
+		{"an explicit leaf", box.ID, sortedIDs(photo, notes)},
+		{"a query context", videos.ID, sortedIDs(clip, film)},
+		{"a query context over a null duration", long.ID, nil},
+		{"a query context on the root", pictures.ID, sortedIDs(photo)},
+		{"a context with no reference", createContext(t, c, explicit(contexts.Root, "empty")).ID, nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := covered(t, c, tc.context); !slices.Equal(got, tc.want) {
+				t.Errorf("covered = %v, want %v, each item once in creation order", got, tc.want)
+			}
+		})
+	}
+
+	if _, err := db.Pool.ExecContext(t.Context(), "UPDATE item SET duration = 300 WHERE id = $1", talk.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := covered(t, c, long.ID), sortedIDs(talk); !slices.Equal(got, want) {
+		t.Errorf("covered by duration gt 120 = %v, want the audio item ingest timed at 300 seconds", got)
+	}
+	if got, want := covered(t, c, library.ID), sortedIDs(clip, film, talk, photo, notes, record); !slices.Equal(got, want) {
+		t.Errorf("library covers %v, want its long query's match too, %v", got, want)
+	}
+}
+
+func TestItems_ContextCoverPages(t *testing.T) {
+	s := integration.Start(t, integration.Options{Env: []string{"MIKOSHI_STORAGE_CONTAINER=" + bucketName()}})
+	c := s.Client()
+	folder := createContext(t, c, explicit(contexts.Root, "folder"))
+	child := createContext(t, c, explicit(folder.ID, "child"))
+	createContext(t, c, queryContext(folder.ID, "videos", `[{"field":"route","op":"eq","value":"video"}]`))
+	var all []items.Item
+	for i := range 3 {
+		item := postRecord(t, c, fmt.Sprintf("r%d", i))
+		c.Put(t, referencePath(folder.ID, item.ID), nil).Expect(t, http.StatusNoContent)
+		c.Put(t, referencePath(child.ID, item.ID), nil).Expect(t, http.StatusNoContent)
+		all = append(all, item)
+	}
+	all = append(all, uploadFile(t, s, nil, 0, "v.mp4", "video/mp4", mp4Of("v")))
+	ids := sortedIDs(all...)
+	path := coveredPath(folder.ID)
+
+	first := webtest.Decode[web.Page[items.Item]](t, c.Get(t, path+"?size=3"), http.StatusOK)
+	if got := itemIDs(first.Items); !slices.Equal(got, ids[:3]) || !first.More || first.Total == nil || *first.Total != 4 || first.Next == "" {
+		t.Fatalf("first page = %v more=%v total=%v next=%q, want the first three of 4, each once", got, first.More, first.Total, first.Next)
+	}
+	next := webtest.Decode[web.Page[items.Item]](t, c.Get(t, path+"?size=3&cursor="+first.Next), http.StatusOK)
+	if got := itemIDs(next.Items); !slices.Equal(got, ids[3:]) || next.More {
+		t.Errorf("continued page = %v more=%v, want the fourth item and no further page", got, next.More)
+	}
+	if last := webtest.Decode[web.Page[items.Item]](t, c.Get(t, path+"?page=2&size=3"), http.StatusOK); !slices.Equal(itemIDs(last.Items), ids[3:]) {
+		t.Errorf("page 2 = %v, want the fourth item", itemIDs(last.Items))
+	}
+	if found := webtest.Decode[items.Item](t, c.Get(t, "/api/items/"+ids[3]), http.StatusOK); !sameItem(t, found, next.Items[0]) {
+		t.Errorf("covered item = %+v, want the read by id's %+v", next.Items[0], found)
+	}
+	listed := webtest.Decode[web.Page[items.Item]](t, c.Get(t, "/api/items?size=1"), http.StatusOK)
+
+	refused := []struct {
+		path   string
+		status int
+		detail string
+	}{
+		{coveredPath(uuid.NewV7().String()), http.StatusNotFound, items.ErrContextNotFound.Error()},
+		{coveredPath("not-a-uuid"), http.StatusBadRequest, ""},
+		{path + "?sort=route", http.StatusBadRequest, ""},
+		{path + "?route=video", http.StatusBadRequest, ""},
+		{path + "?cursor=not-a-cursor", http.StatusBadRequest, ""},
+		{path + "?cursor=" + listed.Next, http.StatusBadRequest, ""},
+	}
+	for _, r := range refused {
+		p := c.Get(t, r.path).Problem(t, r.status)
+		if p.Instance != strings.SplitN(r.path, "?", 2)[0] {
+			t.Errorf("%s: instance %q, want the request's path", r.path, p.Instance)
+		}
+		if r.detail != "" && p.Detail != r.detail {
+			t.Errorf("%s: detail %q, want %q", r.path, p.Detail, r.detail)
 		}
 	}
 }

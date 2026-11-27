@@ -2,6 +2,7 @@ package items_test
 
 import (
 	"bytes"
+	"database/sql/driver"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -30,7 +31,7 @@ func referenceRoutes(t *testing.T, responses ...sqltest.Response) (http.Handler,
 	t.Helper()
 	f := service(t, responses...)
 	r := web.NewRouter()
-	r.Mount(web.NewModule(items.ReferenceRoutes(f.service, slog.New(slog.DiscardHandler))))
+	r.Mount(web.NewModule(items.ReferenceRoutes(f.service, web.Limits{DefaultSize: 10, MaxSize: 100}, slog.New(slog.DiscardHandler))))
 	return r, f
 }
 
@@ -138,6 +139,21 @@ func TestReferenceRoutes_PlaceAndWithdrawAnswerNoContent(t *testing.T) {
 	}
 }
 
+func TestReferenceRoutes_CoveredAnswersAPageOfItems(t *testing.T) {
+	h, _ := referenceRoutes(t, subtree([]driver.Value{contextID, "explicit", nil}), sqltest.WithTotal(page(itemID), 1))
+	res := serve(h, http.MethodGet, "/contexts/"+contextID+"/items?size=5")
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d (body %s), want 200", res.Code, res.Body)
+	}
+	var got web.Page[items.Item]
+	if err := json.Unmarshal(res.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Items) != 1 || got.Items[0].ID != itemID || got.Total == nil || *got.Total != 1 || got.More {
+		t.Errorf("page = %+v, want the one covered item", got)
+	}
+}
+
 func TestReferenceRoutes_Refusals(t *testing.T) {
 	path := "/contexts/" + contextID + "/items/" + itemID
 	cases := []struct {
@@ -156,6 +172,10 @@ func TestReferenceRoutes_Refusals(t *testing.T) {
 		{"a query context", http.MethodPut, path, []sqltest.Response{contextRow(contexts.KindQuery)}, http.StatusConflict, items.ErrQueryContext.Error()},
 		{"a withdrawing from a query context", http.MethodDelete, path, []sqltest.Response{contextRow(contexts.KindQuery)}, http.StatusConflict, items.ErrQueryContext.Error()},
 		{"a withdrawing of an unknown item", http.MethodDelete, path, []sqltest.Response{contextRow(contexts.KindExplicit), affected(0), none()}, http.StatusNotFound, items.ErrItemNotFound.Error()},
+		{"a covered read of a malformed id", http.MethodGet, "/contexts/x/items", nil, http.StatusBadRequest, ""},
+		{"a covered read of an unknown context", http.MethodGet, "/contexts/" + contextID + "/items", []sqltest.Response{subtree()}, http.StatusNotFound, items.ErrContextNotFound.Error()},
+		{"a covered read with a sort", http.MethodGet, "/contexts/" + contextID + "/items?sort=route", nil, http.StatusBadRequest, ""},
+		{"a covered read with a foreign cursor", http.MethodGet, "/contexts/" + contextID + "/items?cursor=x", []sqltest.Response{subtree([]driver.Value{contextID, "explicit", nil})}, http.StatusBadRequest, ""},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

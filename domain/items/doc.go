@@ -3,7 +3,8 @@
 // and a paged read of every item, and created from a completed upload by
 // the Complete function the composition root hands go-web-sdk's upload
 // handler. It owns the references that place items in explicit contexts,
-// served under /api/contexts/{id}/items/{item}, and resolves a reference's
+// served under /api/contexts/{id}/items/{item}, and the paged read of the
+// items a context covers, under /api/contexts/{id}/items, and resolves a
 // context through the contexts service, which imports nothing from it. An item is a named entry over a blob: content-keyed bytes, kept
 // in the object store at sha256/<hex> and shared by every item with that
 // digest. An item is a file, from a completed upload, or a record, from a
@@ -22,6 +23,14 @@
 // constraint, so a repeated or overlapping completion returns the item
 // the first created. A record create is idempotent on nothing.
 //
+// A context covers the items referenced in every explicit context of its
+// subtree and the items each query context of the subtree selects from
+// every item. Each query context's filter is read over the list read, its
+// matches gathered page by page, and the covered read pages the items
+// that either set holds, each once, in creation order. The list read's
+// field contract less its key is [FilterFields], which the composition
+// root hands the contexts service to check a filter against.
+//
 // A reference is a row naming one explicit context and one item, placed
 // and withdrawn idempotently. Its context's kind never changes, so a
 // reference reads the context before it writes and takes no tree lock: a
@@ -31,8 +40,11 @@
 //
 // The package's API:
 //
-//   - [Service], built by [New]: the reads, the file create, the record
-//     create, and the reference's placing and withdrawing.
+//   - [Service], built by [New]: the reads, the covered read, the file
+//     create, the record create, and the reference's placing and
+//     withdrawing.
+//   - [FilterFields]: the field contract a query context's filter is
+//     checked against.
 //   - [Routes] and [ReferenceRoutes]: the route groups the composition
 //     root mounts.
 //   - [Completion]: the upload handler's Complete function.

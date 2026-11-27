@@ -16,6 +16,7 @@ import (
 	"github.com/standards-lab/docproc/route"
 	"github.com/standards-lab/go-storage"
 	"github.com/standards-lab/go-web-sdk"
+	"github.com/standards-lab/sqlate/query"
 
 	"github.com/JaimeStill/capstone-mikoshi/data"
 	"github.com/JaimeStill/capstone-mikoshi/domain/contexts"
@@ -38,6 +39,16 @@ func New(db *data.Database, objects *storage.Store, tree *contexts.Service) *Ser
 	return &Service{store: newStore(db, objects), tree: tree}
 }
 
+// FilterFields returns the field contract a query context's filter is
+// checked against, which the composition root passes to the contexts
+// service: the fields of the item read a filter may name, route, kind, and
+// duration, each with the SQL type a value is cast to. It is the list
+// read's declared contract less its key, compiled over db's catalog and
+// dialect, and performs no I/O.
+func FilterFields(db *data.Database) []query.Field {
+	return filterFields(db)
+}
+
 // Find returns the item with the given id, or sql.ErrNoRows. A malformed
 // id is ErrValidation.
 func (s *Service) Find(ctx context.Context, id string) (Item, error) {
@@ -57,6 +68,57 @@ func (s *Service) List(ctx context.Context, q web.Query) ([]Item, web.Paging, er
 		return nil, web.Paging{}, fmt.Errorf("%w: items are read in creation order and take no sort or filter", ErrValidation)
 	}
 	return s.store.page(ctx, q)
+}
+
+// Covered returns one page of the items the context with the given id
+// covers, in the order of their ids, and the read's paging, honoring the
+// parsed query's page or cursor and size: the items referenced in every
+// explicit context of its subtree, the context included, and the items
+// each query context of the subtree selects from every item, each item
+// once. A query context's filter is read over the list read, and the
+// matches of every filter are gathered before the page is read. The read
+// takes no sort or filter, and a request naming one is ErrValidation, as
+// is a malformed id. An unknown context is ErrContextNotFound. A cursor
+// that did not come from this read unwraps to query.ErrDirectives.
+func (s *Service) Covered(ctx context.Context, contextID string, q web.Query) ([]Item, web.Paging, error) {
+	if _, err := uuid.Parse(contextID); err != nil {
+		return nil, web.Paging{}, fmt.Errorf("%w: context id must be a UUID", ErrValidation)
+	}
+	if len(q.Sort) > 0 || len(q.Filters) > 0 {
+		return nil, web.Paging{}, fmt.Errorf("%w: a context's items are read in creation order and take no sort or filter", ErrValidation)
+	}
+	nodes, err := s.tree.Subtree(ctx, contextID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, web.Paging{}, fmt.Errorf("%w: %s", ErrContextNotFound, contextID)
+	}
+	if err != nil {
+		return nil, web.Paging{}, err
+	}
+	var explicit, matches []string
+	for _, n := range nodes {
+		if n.Kind != contexts.KindQuery {
+			explicit = append(explicit, n.ID)
+			continue
+		}
+		ids, err := s.matching(ctx, n)
+		if err != nil {
+			return nil, web.Paging{}, err
+		}
+		matches = append(matches, ids...)
+	}
+	return s.store.pageCovered(ctx, explicit, matches, q)
+}
+
+func (s *Service) matching(ctx context.Context, n contexts.Node) ([]string, error) {
+	filters, err := n.Filter.Query()
+	if err != nil {
+		return nil, fmt.Errorf("items: the stored filter of context %s: %w", n.ID, err)
+	}
+	ids, err := s.store.matching(ctx, filters)
+	if errors.Is(err, query.ErrDirectives) {
+		return nil, fmt.Errorf("items: the stored filter of context %s: %v", n.ID, err)
+	}
+	return ids, err
 }
 
 // CreateFile creates the file item for a completed upload from its

@@ -48,9 +48,11 @@ the items its parent covers. A filter is set when its context is created and is 
 move or a rename leaves it as it is. The table stores it as `jsonb`, and its constraints hold it
 to a non-empty array on a query context and absent on an explicit one.
 
-The contexts domain checks a filter's shape and operators, and refuses a malformed one with a 400
-that names the failing condition's index. It does not check the field names: the planned items
-domain will check them against its item projection and evaluate the filters.
+The contexts domain checks a filter's shape and operators, then checks it against the item read's
+field contract, which the composition root passes it from the items domain: a field other than
+`route`, `kind`, or `duration`, a value whose JSON type is not its field's (a string for `route`
+and `kind`, a number for `duration`), or `like` on `duration`. It refuses a filter that fails either
+check with a 400 that names the failing condition's index. The items domain evaluates the filters.
 
 ## Membership and retrieval
 
@@ -61,7 +63,7 @@ by the delete of its subtree.
 
 Retrieval narrows chunks through the tree. A context resolves to an item-id set: the explicit
 members of every explicit context in its subtree, plus each query context's matches over all
-items. `Service.Subtree` gives the ids and kinds this starts from, the context included, by a
+items. `Service.Subtree` gives the ids, kinds, and filters this starts from, the context included, by a
 recursive walk down the parent references. The planned chunk statements of `hybrid-search` and
 `context-tools` will take that set and join item → input SHA-256 → source occurrence → source →
 chunk. Chunks and embeddings stay keyed by content and carry no context, as the chunks contract
