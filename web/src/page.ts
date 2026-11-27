@@ -3,8 +3,7 @@
 // writes the foundation's application page into the shell's empty <body>, its header with the
 // title and the Help and Settings buttons, <main>, where the router mounts each view, and the Help
 // and Settings dialogs. The glyphs are web-icons' modules, each its icon's <svg> markup, since the
-// service renders the page and no build fills a marker. Its markup is the standalone kind's page
-// body, glyphs filled, and webappgen's unit tier holds the two equal.
+// service renders the page and no build fills a marker.
 
 import gear from "@standards-lab/web-icons/octicon/gear-16";
 import question from "@standards-lab/web-icons/octicon/question-16";
