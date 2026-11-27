@@ -5,7 +5,7 @@
 //
 //   - infrastructure.go: defineInfrastructure, the lifecycle configuration
 //     and the services the application is composed on (the logger, the
-//     database pool, and the sql node over it);
+//     database pool, the object store, and the sql node over the pool);
 //   - admin.go: defineAdmin, the quiesce gate and the administrative
 //     services, and their /admin mount;
 //   - domain.go: defineDomain, the domain services, and their /api mount;
@@ -69,13 +69,21 @@
 // database, the PostgreSQL pool go-database's postgres provider constructs
 // from the configuration's database block; and the sql node, the pool's
 // session wrapped in sqlate's PostgreSQL dialect and grouped with the
-// pattern catalog as a data.Database. Each service is its own node, with
-// any order it needs declared on its Define line. The composition root is
-// the only package that imports the provider: the admin service receives
-// the pool as a go-database database.DB, and the domains receive the sql
-// node's data.Database. The pool's Start pings the database, so an
-// unreachable database fails startup with an error naming the database
-// node, and its Ready joins the readiness probe under that name. A service
+// pattern catalog as a data.Database; and the storage, go-storage's Store
+// over the client its s3 provider constructs from the configuration's
+// storage block. Each service is its own node, with any order it needs
+// declared on its Define line. The composition root is the only package
+// that imports a provider: the admin service receives the pool as a
+// go-database database.DB, the domains receive the sql node's
+// data.Database, and a package that keeps objects receives the storage
+// node's storage.Store, go-storage's standard tier. The pool's Start pings
+// the database, so an unreachable database fails startup with an error
+// naming the database node, and its Ready joins the readiness probe under
+// that name. The store's Start ensures the configured bucket exists and
+// probes it, so an unreachable gateway fails startup with an error naming
+// the storage node; its Ready probes the bucket live and joins the
+// readiness probe under the storage's name, so an outage after startup
+// makes the service not ready without ending it. A service
 // whose value implements lifecycle.Subsystem takes part in startup and
 // shutdown through its own methods, and its constructor opens nothing:
 // connectivity belongs to its Start, so a failed Build leaks no

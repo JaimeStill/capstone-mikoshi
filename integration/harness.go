@@ -3,11 +3,14 @@ package integration
 import (
 	"net"
 	"net/url"
+	"os"
 	"strconv"
 	"testing"
 	"time"
 
 	"github.com/standards-lab/go-core/process/processtest"
+	"github.com/standards-lab/go-storage"
+	"github.com/standards-lab/go-storage/s3"
 	"github.com/standards-lab/go-web-sdk/webtest"
 	"github.com/standards-lab/sqlate/postgres/pgtest"
 )
@@ -18,6 +21,16 @@ import (
 const DSNEnv = "MIKOSHI_INTEGRATION_DSN"
 
 const databasePrefix = "mikoshi"
+
+// StorageEnv names the environment variable that holds the endpoint of the
+// SeaweedFS S3 gateway every service process stores its objects in; the
+// integration task sets it to the integration stack on SEAWEEDFS_PORT.
+const StorageEnv = "MIKOSHI_INTEGRATION_STORAGE"
+
+const (
+	storageAccount = "admin"
+	storageKey     = "secret"
+)
 
 // ServiceZone is the time zone every service process runs in, through TZ:
 // one whose offset is never zero (+05:30 all year, with no daylight
@@ -72,7 +85,9 @@ func Start(t testing.TB, opts Options) *Service {
 // without waiting, so a test can start several processes at once; Ready
 // waits for one. The service connects to opts.Database, or to a new
 // throwaway database when it is nil, through the MIKOSHI_DATABASE_*
-// overrides.
+// overrides, and to the gateway [StorageEnv] names through the
+// MIKOSHI_STORAGE_* overrides, in the configured bucket unless opts.Env
+// names another.
 func Launch(t testing.TB, opts Options) *Service {
 	t.Helper()
 	db := opts.Database
@@ -81,7 +96,7 @@ func Launch(t testing.TB, opts Options) *Service {
 	}
 	addr := net.JoinHostPort("127.0.0.1", strconv.Itoa(processtest.FreePort(t)))
 	s := &Service{addr: addr, client: webtest.NewClient("http://" + addr)}
-	s.Process = processtest.Launch(t, environment(t, opts, addr, db.DSN)...)
+	s.Process = processtest.Launch(t, environment(t, opts, addr, db.DSN, storageEndpoint(t))...)
 	return s
 }
 
@@ -95,7 +110,37 @@ func (s *Service) Ready(t testing.TB) *Service {
 	return s
 }
 
-func environment(t testing.TB, opts Options, addr, dsn string) []string {
+func storageEndpoint(t testing.TB) string {
+	t.Helper()
+	endpoint := os.Getenv(StorageEnv)
+	if endpoint == "" {
+		t.Fatalf("%s is not set; run the suite through mise run integration", StorageEnv)
+	}
+	return endpoint
+}
+
+// Bucket returns a client of the bucket name on the gateway [StorageEnv]
+// names, with the credentials the harness hands every service process, so
+// a test can check what the service keeps there. It creates nothing.
+func Bucket(t testing.TB, name string) storage.Client {
+	t.Helper()
+	cfg := storage.Config{
+		Endpoint:  storageEndpoint(t),
+		Container: name,
+		Account:   storageAccount,
+		Key:       storageKey,
+	}
+	if err := cfg.Finalize(""); err != nil {
+		t.Fatalf("finalize the bucket's storage config: %v", err)
+	}
+	client, err := s3.New(cfg)
+	if err != nil {
+		t.Fatalf("new s3 client: %v", err)
+	}
+	return client
+}
+
+func environment(t testing.TB, opts Options, addr, dsn, storageEndpoint string) []string {
 	t.Helper()
 	host, port, _ := net.SplitHostPort(addr)
 	u, err := url.Parse(dsn)
@@ -118,6 +163,9 @@ func environment(t testing.TB, opts Options, addr, dsn string) []string {
 		"MIKOSHI_DATABASE_NAME=" + u.Path[1:],
 		"MIKOSHI_DATABASE_USER=" + u.User.Username(),
 		"MIKOSHI_DATABASE_PASSWORD=" + password,
+		"MIKOSHI_STORAGE_ENDPOINT=" + storageEndpoint,
+		"MIKOSHI_STORAGE_ACCOUNT=" + storageAccount,
+		"MIKOSHI_STORAGE_KEY=" + storageKey,
 	}
 	return append(env, opts.Env...)
 }

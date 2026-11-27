@@ -8,6 +8,11 @@ Mikoshi runs on one declared stack, with one provider per capability.
   it runs in the image the compose file builds from
   [`compose/postgres/Dockerfile`](../compose/postgres/Dockerfile), with pgvector 0.8.7 compiled
   from source.
+- Object storage: an S3 bucket, through [go-storage](https://github.com/standards-lab/go-storage)'s
+  `s3` provider. Locally it is SeaweedFS's S3 gateway, in the image the compose file builds from
+  [`compose/seaweedfs/Dockerfile`](../compose/seaweedfs/Dockerfile), or the capstone stack's
+  gateway through `MIKOSHI_STORAGE_ENDPOINT=http://127.0.0.1:8335`. Mikoshi creates its bucket at
+  startup.
 
 ## Standard and native tiers
 
@@ -19,19 +24,21 @@ features. Everything pgvector adds (the `vector` type, the `hnsw` index method, 
 Only these packages import a provider or use pgvector:
 
 - The composition root, `internal/app`. `infrastructure.go` opens the pool through go-database's
-  `postgres` provider, and its `sql` node wraps the pool in sqlate's `postgres` dialect. `admin.go`
-  declares pgvector to the migrator by name, from sqlate's `postgres/pgvector`.
+  `postgres` provider, its `sql` node wraps the pool in sqlate's `postgres` dialect, and its
+  `storage` node wraps go-storage's `s3` client in a `storage.Store`. `admin.go` declares
+  pgvector to the migrator by name, from sqlate's `postgres/pgvector`.
 - The migrations, `data/migrations`, which create the `vector` column and space 1's HNSW index.
 - The admin domain, `admin/database`, through go-database's admin service alone: it reports
   pgvector's status in the schema status and imports no provider.
 
 Every other package stays provider-free: the admin service receives the pool as a go-database
-`database.DB`, and the domains receive the `sql` node's `data.Database`, the dialect-wrapped
-session and the pattern catalog their statements compile against. The integration harness and
-suite sit outside the service's process and reach the database directly: the harness makes each
-test's database through sqlate's `postgres/pgtest`, and the suite names pgvector from
-`postgres/pgvector` and runs pgvector queries to prove the index. The package boundary is a
-convention held in review.
+`database.DB`, the domains receive the `sql` node's `data.Database`, the dialect-wrapped session
+and the pattern catalog their statements compile against, and a package that keeps objects
+receives the `storage` node's `storage.Store`, go-storage's standard tier. The integration
+harness and suite sit outside the service's process and reach the database and the gateway
+directly: the harness makes each test's database through sqlate's `postgres/pgtest` and reaches
+a bucket through go-storage's `s3`, and the suite names pgvector from `postgres/pgvector` and
+runs pgvector queries to prove the index. The package boundary is a convention held in review.
 
 sqlint holds each statement file to its tier. `mise run check` runs it under
 [`sqlint.toml`](../sqlint.toml), which fails a statement file in `domain/*/statements` or

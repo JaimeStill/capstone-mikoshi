@@ -331,3 +331,56 @@ func TestDatabase_FinalizeWrapsInvalidPort(t *testing.T) {
 		t.Errorf("error = %v, want the database block wrap naming MIKOSHI_DATABASE_PORT", err)
 	}
 }
+
+func TestStorage_FinalizeDefaults(t *testing.T) {
+	cfg := configtest.Minimal()
+	if err := cfg.Finalize(""); err != nil {
+		t.Fatalf("Finalize: %v", err)
+	}
+
+	if !cfg.Storage.Finalized() {
+		t.Error("Storage.Finalized() = false after Finalize")
+	}
+	if got := cfg.Storage.RequestTimeout.Duration(); got != 10*time.Second {
+		t.Errorf("Storage.RequestTimeout = %s, want the 10s default", got)
+	}
+	if cfg.Storage.Key != "" {
+		t.Errorf("Storage.Key = %q, want none without a secrets layer", cfg.Storage.Key)
+	}
+}
+
+func TestStorage_FinalizeEnvOverrides(t *testing.T) {
+	t.Setenv("MIKOSHI_STORAGE_ENDPOINT", "http://127.0.0.1:8337")
+	t.Setenv("MIKOSHI_STORAGE_CONTAINER", "mikoshi-test")
+	t.Setenv("MIKOSHI_STORAGE_ACCOUNT", "tester")
+	t.Setenv("MIKOSHI_STORAGE_KEY", "from-env")
+	t.Setenv("MIKOSHI_STORAGE_OPTIONS_REGION", "eu-west-1")
+
+	cfg := configtest.Minimal()
+	if err := cfg.Finalize("mikoshi"); err != nil {
+		t.Fatalf("Finalize: %v", err)
+	}
+
+	st := cfg.Storage
+	if st.Endpoint != "http://127.0.0.1:8337" || st.Container != "mikoshi-test" {
+		t.Errorf("Storage endpoint, container = %q, %q, want the MIKOSHI_STORAGE_* values", st.Endpoint, st.Container)
+	}
+	if st.Account != "tester" || st.Key != "from-env" {
+		t.Errorf("Storage account, key = %q, %q, want the MIKOSHI_STORAGE_* values", st.Account, st.Key)
+	}
+	if st.Options["region"] != "eu-west-1" {
+		t.Errorf("Storage.Options[region] = %q, want MIKOSHI_STORAGE_OPTIONS_REGION's", st.Options["region"])
+	}
+}
+
+func TestStorage_FinalizeRequiresContainer(t *testing.T) {
+	cfg := configtest.Minimal()
+	cfg.Storage.Container = ""
+	err := cfg.Finalize("")
+	if err == nil {
+		t.Fatal("Finalize accepted a config with no storage container")
+	}
+	if !strings.Contains(err.Error(), "storage:") || !strings.Contains(err.Error(), "container") {
+		t.Errorf("error = %v, want the storage block wrap naming the container", err)
+	}
+}

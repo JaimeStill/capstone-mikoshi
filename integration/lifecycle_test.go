@@ -91,7 +91,7 @@ func TestLifecycle_ReadyzContract(t *testing.T) {
 	if got.Status != "ready" {
 		t.Errorf("readiness status = %q, want ready", got.Status)
 	}
-	want := []check{{Name: "lifecycle", Ready: true}, {Name: "database", Ready: true}, {Name: "schema", Ready: true}}
+	want := []check{{Name: "lifecycle", Ready: true}, {Name: "database", Ready: true}, {Name: "storage", Ready: true}, {Name: "schema", Ready: true}}
 	if !slices.Equal(got.Checks, want) {
 		t.Errorf("readiness checks = %+v, want exactly %+v", got.Checks, want)
 	}

@@ -2,6 +2,7 @@ package configtest
 
 import (
 	"net"
+	"strconv"
 	"testing"
 
 	"github.com/standards-lab/go-core/logging"
@@ -15,14 +16,15 @@ import (
 func Minimal() *config.Config {
 	cfg := &config.Config{}
 	cfg.Database.Name = "app"
+	cfg.Storage.Container = "mikoshi"
 	return cfg
 }
 
 // Config returns a finalized Config whose composition performs no I/O: the
 // server on a loopback ephemeral port, debug logging so requests leave
-// records, and the database aimed at a closed loopback port, so a dial is
-// refused immediately instead of timing out. The empty prefix disables
-// environment overrides.
+// records, and the database and the object store each aimed at a closed
+// loopback port, so a dial is refused immediately instead of timing out.
+// The empty prefix disables environment overrides.
 func Config(t *testing.T) *config.Config {
 	t.Helper()
 	cfg := Minimal()
@@ -33,6 +35,9 @@ func Config(t *testing.T) *config.Config {
 	cfg.Database.User = "app"
 	cfg.Database.Port = new(ClosedPort(t))
 	cfg.Database.Options = map[string]string{"sslmode": "disable"}
+	cfg.Storage.Endpoint = "http://" + net.JoinHostPort("127.0.0.1", strconv.Itoa(ClosedPort(t)))
+	cfg.Storage.Account = "admin"
+	cfg.Storage.Key = "secret"
 	if err := cfg.Finalize(""); err != nil {
 		t.Fatalf("finalize hermetic config: %v", err)
 	}

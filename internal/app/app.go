@@ -11,6 +11,7 @@ import (
 	"github.com/standards-lab/go-core/lifecycle"
 	"github.com/standards-lab/go-core/reactor"
 	"github.com/standards-lab/go-database"
+	"github.com/standards-lab/go-storage"
 	"github.com/standards-lab/go-web-sdk"
 
 	"github.com/JaimeStill/capstone-mikoshi/data"
@@ -40,12 +41,14 @@ type Nodes struct {
 	Writer *graph.Node[io.Writer]
 
 	// Infrastructure (infrastructure.go): the database is the PostgreSQL
-	// pool, opened through go-database's provider; the sql node is the
-	// pool's session grouped with the pattern catalog, the database as the
-	// admin service and the domains see it.
+	// pool, opened through go-database's provider; the storage is the
+	// object store, go-storage's Store over its s3 provider; the sql node
+	// is the pool's session grouped with the pattern catalog, the database
+	// as the admin service and the domains see it.
 	LifecycleConfig *graph.Node[lifecycle.Config]
 	Logger          *graph.Node[*slog.Logger]
 	Database        *graph.Node[*database.DB]
+	Storage         *graph.Node[*storage.Store]
 	SQL             *graph.Node[*data.Database]
 
 	// Admin (admin.go): the gate is the process's quiesce gate, which the
@@ -107,13 +110,14 @@ func (a *App) Nodes() Nodes { return a.nodes }
 // service starts from: the server, which reaches the router, the
 // readiness, the domain services, the admin mount's schema and gate, the
 // sql node, the database, the logger, the writer node, and the config
-// node through its Uses and theirs; and the reactors group, whose members
-// no Use reaches.
+// node through its Uses and theirs; the reactors group, whose members no
+// Use reaches; and the storage, which no Use reaches yet, so the bucket is
+// ensured at startup and the store joins the readiness probe.
 // [App.Run] builds this set plus the lifecycle config node the Coordinator
 // is configured from.
 func (a *App) Roots() []graph.Ref {
 	n := a.nodes
-	return []graph.Ref{n.Server, n.Reactors}
+	return []graph.Ref{n.Server, n.Reactors, n.Storage}
 }
 
 // Run runs the service as a web.Service over [App.Roots] until ctx ends,

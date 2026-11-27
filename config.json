@@ -19,6 +19,12 @@
       "sslmode": "disable"
     }
   },
+  "storage": {
+    "container": "mikoshi",
+    "options": {
+      "region": "us-east-1"
+    }
+  },
   "reads": {
     "default_size": 20,
     "max_size": 100

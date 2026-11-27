@@ -9,6 +9,9 @@
 //   - [Database] makes an empty throwaway database through sqlate's
 //     pgtest, on the PostgreSQL server whose admin DSN [DSNEnv] holds, and
 //     drops it when the test ends.
+//   - [Bucket] makes a client of one bucket on the SeaweedFS S3 gateway
+//     whose endpoint [StorageEnv] holds, the gateway every service process
+//     stores its objects in.
 //   - [Options] holds the database one service process connects to and the
 //     MIKOSHI_* overrides it adds.
 //   - [Start] runs the service on a reserved port, against its own
@@ -20,5 +23,6 @@
 //
 // The harness is untagged, so the unit tier type-checks it on every pull
 // request; the suite files carry the integration tag and need the server
-// [DSNEnv] names, the integration stack the integration task starts.
+// [DSNEnv] names and the gateway [StorageEnv] names, the integration stack
+// the integration task starts.
 package integration

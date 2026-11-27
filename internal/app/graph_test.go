@@ -16,6 +16,8 @@ import (
 	"github.com/standards-lab/go-core/graph/graphtest"
 	"github.com/standards-lab/go-core/lifecycle"
 	"github.com/standards-lab/go-core/reactor"
+	"github.com/standards-lab/go-storage"
+	"github.com/standards-lab/go-storage/storagetest"
 	"github.com/standards-lab/go-web-sdk"
 
 	"github.com/JaimeStill/capstone-mikoshi/internal/app"
@@ -36,8 +38,58 @@ func TestGraph_ReadinessChecks(t *testing.T) {
 	for _, c := range lifecycle.New(sys, cfg.Config).Checks() {
 		got = append(got, c.Name)
 	}
-	if want := []string{"database", "schema"}; !slices.Equal(got, want) {
+	if want := []string{"database", "storage", "schema"}; !slices.Equal(got, want) {
 		t.Errorf("checks = %v, want %v\nlayers:\n%s", got, want, sys)
+	}
+}
+
+func fakeStorage(t *testing.T, a *app.App) *storagetest.Fake {
+	t.Helper()
+	fake := storagetest.NewFake(storagetest.Options{NoContainer: true})
+	a.Graph().Replace(a.Nodes().Storage, func(s *graph.Scope) (*storage.Store, error) {
+		return storage.New(fake, s.Use(a.Nodes().Config).Storage), nil
+	})
+	return fake
+}
+
+func TestGraph_StorageReadinessFollowsTheStore(t *testing.T) {
+	cfg := configtest.Config(t)
+	a := app.New(cfg, io.Discard)
+	fake := fakeStorage(t, a)
+	sys := buildAsRun(t, a)
+
+	var check lifecycle.ReadinessChecker
+	for _, c := range lifecycle.New(sys, cfg.Config).Checks() {
+		if c.Name == a.Nodes().Storage.Name() {
+			check = c.Checker
+		}
+	}
+	if check == nil {
+		t.Fatalf("no %s readiness check\nlayers:\n%s", a.Nodes().Storage.Name(), sys)
+	}
+	if check.Ready() {
+		t.Error("storage ready before Start, want not ready")
+	}
+
+	store := sys.Get(a.Nodes().Storage)
+	if err := store.Start(t.Context()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Shutdown(context.Background()) })
+	if !fake.HasContainer() {
+		t.Error("Start did not ensure the container")
+	}
+	if !check.Ready() {
+		t.Error("storage not ready after Start")
+	}
+
+	fake.SetDown(true)
+	if check.Ready() {
+		t.Error("storage ready during an outage, want not ready")
+	}
+	fake.SetDown(false)
+	if !check.Ready() {
+		t.Error("storage not ready after the outage ended")
 	}
 }
 
