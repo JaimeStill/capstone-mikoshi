@@ -31,7 +31,7 @@
 // and cannot fail. [App.Graph] and [App.Nodes] publish the graph and its
 // handles, so a caller can Observe or Replace a node before Run. [App.Run]
 // is the hot start plus shutdown: it runs a go-web-sdk web.Service, which
-// builds [App.Roots], the server, the database, and the reactors group, plus
+// builds [App.Roots], the server, the schema, and the reactors group, plus
 // the lifecycle config node, hands the System to go-core's lifecycle Coordinator, and
 // returns the process exit code. A constructor's error fails the Build,
 // and Run writes "service failed: " and the error, which names the failing
@@ -84,11 +84,17 @@
 // it administers is a lifecycle participant, and the domains that depend
 // on that state Use it. Each admin domain's route group mounts into the
 // /admin group, with its service and the logger for its error writer read
-// with Use. The template defines none and ships the /admin group empty;
-// which admin services a service composes follows the infrastructure it
-// adopts. In production the admin mount belongs on its own listener,
-// authenticated and unreachable from the public API's network path, an
-// isolation the application settles when the first admin service arrives.
+// with Use. Mikoshi's one admin domain is the schema: go-database's admin
+// service over the pool, a sqlate session wrapped in the PostgreSQL
+// dialect, and a migrator over data.Migrations that declares pgvector by
+// name only, with no seeder and no seed state. Its Start installs the
+// version of pgvector the image offers, failing before any migration when
+// the image offers none, then applies the set; its Ready joins the
+// readiness probe under the schema's name, false while a migration or the
+// declaration is pending or mismatched. The /admin group ships empty until
+// the schema's route group mounts into it. In production the admin mount
+// belongs on its own listener, authenticated and unreachable from the
+// public API's network path.
 //
 // The domain layer has one node per domain layer. Domain services are
 // defined in the module's base-layer domain packages, one package per

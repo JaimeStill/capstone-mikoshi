@@ -36,22 +36,25 @@ func TestGraph_ReadinessChecks(t *testing.T) {
 	for _, c := range lifecycle.New(sys, cfg.Config).Checks() {
 		got = append(got, c.Name)
 	}
-	if want := []string{"database"}; !slices.Equal(got, want) {
+	if want := []string{"database", "schema"}; !slices.Equal(got, want) {
 		t.Errorf("checks = %v, want %v\nlayers:\n%s", got, want, sys)
 	}
 }
 
-func TestGraph_DatabaseBelowServer(t *testing.T) {
+func TestGraph_SchemaBetweenDatabaseAndServer(t *testing.T) {
 	a := app.New(configtest.Config(t), io.Discard)
 	sys := buildAsRun(t, a)
 	n := a.Nodes()
 
-	if !sys.Has(n.Database) {
-		t.Fatalf("%s is not in the System\nlayers:\n%s", n.Database.Name(), sys)
+	for _, r := range []graph.Ref{n.Database, n.Schema} {
+		if !sys.Has(r) {
+			t.Fatalf("%s is not in the System\nlayers:\n%s", r.Name(), sys)
+		}
 	}
-	if d, s := sys.LayerOf(n.Database), sys.LayerOf(n.Server); d >= s {
-		t.Errorf("%s in layer %d, %s in layer %d; want the database below\nlayers:\n%s",
-			n.Database.Name(), d, n.Server.Name(), s, sys)
+	d, sc, sv := sys.LayerOf(n.Database), sys.LayerOf(n.Schema), sys.LayerOf(n.Server)
+	if d >= sc || sc >= sv {
+		t.Errorf("%s in layer %d, %s in layer %d, %s in layer %d; want the schema above the database and below the server\nlayers:\n%s",
+			n.Database.Name(), d, n.Schema.Name(), sc, n.Server.Name(), sv, sys)
 	}
 }
 
