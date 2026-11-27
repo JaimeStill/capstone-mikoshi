@@ -1,0 +1,10 @@
+node_modules
+dist/
+
+mise.local.toml
+
+*.swp
+*~
+.vscode/
+.idea/
+.DS_Store

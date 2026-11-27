@@ -14,10 +14,12 @@ repository's working context is [`context/README.md`](context/README.md).
 
 ```sh
 mise trust && mise install
+mise -C web install && mise -C web run install
 mise run serve
 ```
 
-The service logs `server ready` on `localhost:8080` (the `local` overlay binds loopback and runs
+`serve` builds the web client in [`web/`](web/README.md) first; the service embeds the build and
+serves its shell at `/`. The service logs `server ready` on `localhost:8080` (the `local` overlay binds loopback and runs
 debug logging). From a second shell:
 
 ```sh
@@ -33,14 +35,17 @@ Each task wraps a plain command, so the repository works without mise:
 
 | Task | Command | What it does |
 |------|---------|--------------|
-| `mise run check` | build, vet, `gofmt -l`, `go fix -diff`, `go mod tidy -diff`, `go test -race`, `golangci-lint run`, `lint-context`, `lint-references` | The one read-only check, as CI runs it; the lints run at the project root and, when the project is nested in a git repository, at its top level |
+| `mise run check` | `client:build`, `client:check`, then build, vet, `gofmt -l`, `go fix -diff`, `go mod tidy -diff`, `go test -race`, `golangci-lint run`, `lint-context`, `lint-references` | The one read-only check, as CI runs it; the lints run at the project root and, when the project is nested in a git repository, at its top level |
 | `mise run currency` | `bash scripts/currency.sh` | Report requirements, Go version, tools, and action pins behind their latest |
 | `mise run upgrade` | `go mod edit -go=<current minor> -toolchain=none`, `go get <direct>@latest`, `go mod tidy`, `mise upgrade --bump --local` | Upgrade the go directive, requirements, and tools, rewriting `go.mod` and `mise.toml` |
 | `mise run build` | `go build ./...` | Build the module |
 | `mise run vet` | `go vet -tags integration ./...` | Compile-check and vet, the integration suite included |
-| `mise run serve` | `go run ./cmd/server` | Run the service locally |
-| `mise run test` | `go test -race ./...` | Run the unit tier |
-| `mise run integration` | `go test -race -count=1 -tags integration ./integration/` | Run the integration tier against the built service |
+| `mise run serve` | `go run ./cmd/server` | Run the service locally, after `client:build` |
+| `mise run test` | `go test -race ./...` | Run the unit tier, after `client:build` |
+| `mise run integration` | `go test -race -count=1 -tags integration ./integration/` | Run the integration tier against the built service, after `client:build` |
+| `mise run client:build` | `mise -C web run build` | Build the web client into `web/dist/`, which the service embeds |
+| `mise run client:check` | `mise -C web run check` | Run the web client's own check: lint, types, unit, and browser tests |
+| `mise run dev` | `vite build --watch` in `web/` beside `air` | Rebuild the client and restart the service on each change (`.air.toml`) |
 | `mise run fmt` | `gofmt -w .` | Format the source |
 | `mise run tidy` | `go mod tidy` | Reconcile module requirements |
 | `mise run lint` | `golangci-lint run --build-tags integration ./...` | Lint, the integration suite included |
@@ -67,7 +72,9 @@ a reactor sits below the server by its membership of the reactors group alone, a
 between nodes is dropped but one: the server's order after the reactors group, while the group
 is empty. Each check is shown failing on a fixture that breaks it, with the layer table.
 
-The template's suite asserts the baseline: boot, both probes, and the drain. As the build points
+The template's suite asserts the baseline: boot, both probes, and the drain. The client's cases
+assert the shell at `/` and at a deep link, a built asset's caching, a missing asset's 404
+problem, and that the probes and `/api/` are not answered by the shell. As the build points
 fill in, each capability adds its cases beside them, and the first backing service brings its
 compose stack: the task then boots that stack as an isolated compose project on its own port,
 runs the suite, and tears it down with its volume on exit, so a developer's stack and data are

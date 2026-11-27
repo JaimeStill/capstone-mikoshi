@@ -20,6 +20,7 @@ func (n *Nodes) newRouter(s *graph.Scope) (*web.Router, error) {
 	}
 
 	web.RegisterHealth(router, s.Use(n.Readiness), web.Problem{})
+	mountClient(router, s, n)
 	return router, nil
 }
 

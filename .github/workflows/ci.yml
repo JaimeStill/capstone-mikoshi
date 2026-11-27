@@ -18,6 +18,15 @@ jobs:
 
       - uses: jdx/mise-action@v5.2.10
 
+      - name: Install the web client's tools and packages
+        run: |
+          mise -C web install
+          mise -C web run install
+
+      - name: Build the web client
+        run: |
+          mise -C web run build
+
       - name: mise run check
         run: mise run check
 
@@ -28,6 +37,15 @@ jobs:
       - uses: actions/checkout@v7.0.1
 
       - uses: jdx/mise-action@v5.2.10
+
+      - name: Install the web client's tools and packages
+        run: |
+          mise -C web install
+          mise -C web run install
+
+      - name: Build the web client
+        run: |
+          mise -C web run build
 
       - name: go test -tags integration
         run: go test -race -count=1 -tags integration ./integration/
