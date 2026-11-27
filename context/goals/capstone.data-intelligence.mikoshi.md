@@ -1,6 +1,6 @@
 # goal · capstone.data-intelligence.mikoshi
 
-- **State:** building
+- **State:** brief ready
 - **Task:** web-shell
 - **Branch:** web-shell
 
