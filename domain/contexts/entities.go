@@ -79,6 +79,20 @@ func (c CreateContext) Validate() error {
 	return errors.Join(errs...)
 }
 
+// RenameContext is the rename command's input: the context's new name.
+type RenameContext struct {
+	Name string `json:"name"`
+}
+
+// Validate rejects an empty name. The name's uniqueness among the
+// context's siblings is the store's.
+func (r RenameContext) Validate() error {
+	if r.Name == "" {
+		return fmt.Errorf("%w: name must not be empty", ErrValidation)
+	}
+	return nil
+}
+
 // Filter is a query context's filter: its conditions, every one of which
 // an item must meet. It is stored as a JSON array, and its zero value, nil,
 // is an explicit context's absent filter.

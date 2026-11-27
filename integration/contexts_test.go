@@ -6,11 +6,13 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 	"uuid"
 
+	"github.com/standards-lab/go-web-sdk"
 	"github.com/standards-lab/go-web-sdk/webtest"
 
 	"github.com/JaimeStill/capstone-mikoshi/domain/contexts"
@@ -211,5 +213,160 @@ func TestContexts_SchemaHoldsTheTreeRules(t *testing.T) {
 		if want := `constraint "` + r.constraint + `"`; err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("%s = %v, want it refused by %s", r.name, err, r.constraint)
 		}
+	}
+}
+
+func childPage(t *testing.T, c *webtest.Client, path string) web.Page[contexts.Context] {
+	t.Helper()
+	return webtest.Decode[web.Page[contexts.Context]](t, c.Get(t, path), http.StatusOK)
+}
+
+func names(items []contexts.Context) []string {
+	out := make([]string, len(items))
+	for i, item := range items {
+		out[i] = item.Name
+	}
+	return out
+}
+
+func TestContexts_ChildrenPagedByName(t *testing.T) {
+	c := integration.Start(t, integration.Options{Env: []string{"MIKOSHI_READS_DEFAULT_SIZE=2", "MIKOSHI_READS_MAX_SIZE=3"}}).Client()
+
+	folder := createContext(t, c, explicit(contexts.Root, "folder"))
+	for _, body := range []string{
+		explicit(folder.ID, "c"), explicit(folder.ID, "a"),
+		queryContext(folder.ID, "e", `[{"field":"a","op":"null"}]`),
+		explicit(folder.ID, "b"), explicit(folder.ID, "d"),
+	} {
+		createContext(t, c, body)
+	}
+	under := createContext(t, c, explicit(folder.ID, "x"))
+	createContext(t, c, explicit(under.ID, "grandchild"))
+	path := "/api/contexts/" + folder.ID + "/children"
+
+	first := childPage(t, c, path)
+	if got := names(first.Items); !slices.Equal(got, []string{"a", "b"}) || first.Size != 2 || first.Page != 1 || first.Total == nil || *first.Total != 6 || !first.More {
+		t.Errorf("first page = %v %+v, want [a b] of 6 at the default size 2", got, first)
+	}
+	for _, item := range first.Items {
+		if item.ParentID == nil || *item.ParentID != folder.ID {
+			t.Errorf("child %+v, want it under %s", item, folder.ID)
+		}
+	}
+	if last := childPage(t, c, path+"?page=2&size=3"); !slices.Equal(names(last.Items), []string{"d", "e", "x"}) || last.More {
+		t.Errorf("page 2 of size 3 = %v more=%v, want [d e x] and no further page", names(last.Items), last.More)
+	}
+
+	var walked []string
+	next := path
+	for range 4 {
+		p := childPage(t, c, next)
+		walked = append(walked, names(p.Items)...)
+		if !p.More {
+			break
+		}
+		next = path + "?cursor=" + p.Next
+	}
+	if !slices.Equal(walked, []string{"a", "b", "c", "d", "e", "x"}) {
+		t.Errorf("walked by cursor = %v, want every child once, by name", walked)
+	}
+
+	refused := []struct{ query, want string }{
+		{"?size=4", "must be at most 3"},
+		{"?page=0", "must be an integer of at least 1"},
+		{"?sort=-name", "take no sort or filter"},
+		{"?kind=query", "take no sort or filter"},
+		{"?cursor=forged", "cursor"},
+	}
+	for _, r := range refused {
+		if p := c.Get(t, path+r.query).Problem(t, http.StatusBadRequest); !strings.Contains(p.Detail, r.want) {
+			t.Errorf("%s: detail = %q, want it naming %q", r.query, p.Detail, r.want)
+		}
+	}
+}
+
+func TestContexts_ChildrenOfALeafIsAnEmptyPage(t *testing.T) {
+	c := integration.Start(t, integration.Options{}).Client()
+
+	saved := createContext(t, c, queryContext(contexts.Root, "pdfs", `[{"field":"a","op":"null"}]`))
+	res := c.Get(t, "/api/contexts/"+saved.ID+"/children").Expect(t, http.StatusOK)
+	var p web.Page[contexts.Context]
+	res.JSON(t, &p)
+	if len(p.Items) != 0 || p.More || p.Total == nil || *p.Total != 0 || !strings.Contains(string(res.Body), `"items":[]`) {
+		t.Errorf("children of a query context = %s, want an empty page", res.Body)
+	}
+}
+
+func TestContexts_ChildrenRefusesMalformedAndUnknownParents(t *testing.T) {
+	c := integration.Start(t, integration.Options{}).Client()
+
+	if p := c.Get(t, "/api/contexts/not-a-uuid/children").Problem(t, http.StatusBadRequest); !strings.Contains(p.Detail, "not-a-uuid") {
+		t.Errorf("detail = %q, want the malformed id named", p.Detail)
+	}
+	unknown := "/api/contexts/" + uuid.NewV7().String() + "/children"
+	if p := c.Get(t, unknown).Problem(t, http.StatusNotFound); p.Instance != unknown {
+		t.Errorf("instance = %q, want %s", p.Instance, unknown)
+	}
+}
+
+func TestContexts_RenameReadsBack(t *testing.T) {
+	c := integration.Start(t, integration.Options{}).Client()
+
+	folder := createContext(t, c, explicit(contexts.Root, "folder"))
+	child := createContext(t, c, explicit(folder.ID, "draft"))
+	renamed := webtest.Decode[contexts.Context](t, c.Put(t, "/api/contexts/"+child.ID, `{"name":"final"}`), http.StatusOK)
+	if renamed.ID != child.ID || renamed.Name != "final" || renamed.ParentID == nil || *renamed.ParentID != folder.ID || !renamed.CreatedAt.Equal(child.CreatedAt) {
+		t.Errorf("renamed = %+v, want %s named final under %s", renamed, child.ID, folder.ID)
+	}
+	read := webtest.Decode[contexts.Context](t, c.Get(t, "/api/contexts/"+child.ID), http.StatusOK)
+	if !sameContext(t, read, renamed) {
+		t.Errorf("read %+v, want %+v", read, renamed)
+	}
+	if got := names(childPage(t, c, "/api/contexts/"+folder.ID+"/children").Items); !slices.Equal(got, []string{"final"}) {
+		t.Errorf("children = %v, want [final]", got)
+	}
+
+	webtest.Decode[contexts.Context](t, c.Put(t, "/api/contexts/"+child.ID, `{"name":"final"}`), http.StatusOK)
+}
+
+func TestContexts_RenameOntoASiblingsNameConflicts(t *testing.T) {
+	c := integration.Start(t, integration.Options{}).Client()
+
+	folder := createContext(t, c, explicit(contexts.Root, "folder"))
+	createContext(t, c, explicit(contexts.Root, "taken"))
+	sibling := createContext(t, c, explicit(contexts.Root, "free"))
+	p := c.Put(t, "/api/contexts/"+sibling.ID, `{"name":"taken"}`).Problem(t, http.StatusConflict)
+	if p.Detail != contexts.ErrNameTaken.Error() {
+		t.Errorf("detail = %q, want %q", p.Detail, contexts.ErrNameTaken.Error())
+	}
+	if read := webtest.Decode[contexts.Context](t, c.Get(t, "/api/contexts/"+sibling.ID), http.StatusOK); read.Name != "free" {
+		t.Errorf("refused rename left the name %q, want free", read.Name)
+	}
+
+	cousin := createContext(t, c, explicit(folder.ID, "other"))
+	if got := webtest.Decode[contexts.Context](t, c.Put(t, "/api/contexts/"+cousin.ID, `{"name":"taken"}`), http.StatusOK); got.Name != "taken" {
+		t.Errorf("rename under another parent = %+v, want it named taken", got)
+	}
+}
+
+func TestContexts_RenameRefusals(t *testing.T) {
+	c := integration.Start(t, integration.Options{}).Client()
+
+	child := createContext(t, c, explicit(contexts.Root, "child"))
+	if p := c.Put(t, "/api/contexts/"+child.ID, `{"name":""}`).Problem(t, http.StatusBadRequest); !strings.Contains(p.Detail, "name must not be empty") {
+		t.Errorf("detail = %q, want the empty name named", p.Detail)
+	}
+	if p := c.Put(t, "/api/contexts/"+contexts.Root, `{"name":"top"}`).Problem(t, http.StatusConflict); p.Detail != contexts.ErrRootFixed.Error() {
+		t.Errorf("detail = %q, want %q", p.Detail, contexts.ErrRootFixed.Error())
+	}
+	if root := webtest.Decode[contexts.Context](t, c.Get(t, "/api/contexts/"+contexts.Root), http.StatusOK); root.Name != "root" {
+		t.Errorf("root named %q after a refused rename, want root", root.Name)
+	}
+	unknown := "/api/contexts/" + uuid.NewV7().String()
+	if p := c.Put(t, unknown, `{"name":"n"}`).Problem(t, http.StatusNotFound); p.Instance != unknown {
+		t.Errorf("instance = %q, want %s", p.Instance, unknown)
+	}
+	if p := c.Put(t, "/api/contexts/not-a-uuid", `{"name":"n"}`).Problem(t, http.StatusBadRequest); !strings.Contains(p.Detail, "not-a-uuid") {
+		t.Errorf("detail = %q, want the malformed id named", p.Detail)
 	}
 }

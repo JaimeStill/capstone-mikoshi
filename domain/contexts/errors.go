@@ -12,11 +12,15 @@ var (
 	// exist, a 404.
 	ErrParentNotFound = errors.New("the parent context does not exist")
 
-	// ErrNameTaken reports a create onto the name a sibling already
-	// holds, a 409.
+	// ErrNameTaken reports a create or a rename onto the name a sibling
+	// already holds, a 409.
 	ErrNameTaken = errors.New("a sibling context already has that name")
 
 	// ErrQueryParent reports a create under a query context, which is a
 	// leaf, a 409.
 	ErrQueryParent = errors.New("a query context is a leaf; no context is created under one")
+
+	// ErrRootFixed reports a rename of the root, whose name is fixed, a
+	// 409.
+	ErrRootFixed = errors.New("the root context is not renamed")
 )

@@ -17,6 +17,8 @@ func (n *Nodes) newContexts(s *graph.Scope) (*contexts.Service, error) {
 
 func mountAPI(s *graph.Scope, n *Nodes) *web.Group {
 	api := web.NewGroup("/api")
-	api.Mount(contexts.Routes(s.Use(n.Contexts), s.Use(n.Logger)))
+	reads := s.Use(n.Config).Reads.Limits()
+	reads.Cursor = true
+	api.Mount(contexts.Routes(s.Use(n.Contexts), reads, s.Use(n.Logger)))
 	return api
 }
