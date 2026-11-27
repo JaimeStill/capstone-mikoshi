@@ -9,22 +9,30 @@
 1. [x] web-shell
 2. [x] store
 3. [x] contexts
-4. [ ] browser-upload
-5. [ ] items
-6. [ ] ingest
-7. [ ] hybrid-search
-8. [ ] context-tools
-9. [ ] standing-analyses
-10. [ ] lineage
-11. [ ] signal-flow
+4. [ ] upload
+5. [ ] browser-upload
+6. [ ] items
+7. [ ] sse-codec
+8. [ ] event-extensions
+9. [ ] sse-writer
+10. [ ] go-ai-sse
+11. [ ] hybrid-search
+12. [ ] context-tools
+13. [ ] ingest
+14. [ ] standing-analyses
+15. [ ] lineage
+16. [ ] sse-event-sequence
+17. [ ] event-relay
+18. [ ] signal-flow
+19. [ ] image
 
 ## Decisions
 
 - capstone: contracts (`chunks`, `protocol`, `events`) are designed in `.foundation` at capstone-data-intelligence; Bunrei and Mikoshi build against them, and a task that reads one opens its summary with "Waits on".
 - capstone: Bunrei's `client` module is released by tag (`client/v0.1.0` at `api`); Mikoshi imports the published version, never a replace directive.
-- capstone: only `.bunrei` touches the exclusive group (docproc, docinfer, go-messaging); `.mikoshi` stays out of it, so its SSE relay and context tree live in Mikoshi, shaped to graduate.
+- capstone: go-web-sdk's resumable upload and the SSE tasks are Mikoshi's (moved from `.bunrei`, which keeps docproc, docinfer, and go-messaging); `.bunrei` `api` waits on `upload`'s release.
 - signal boundary: a model's token stream travels as direct SSE inside the one request that asked for it; only committed outcomes become go-messaging events (one per committed turn or analysis, with lineage); live views read events, never streams. Rejected: token deltas on go-messaging (a JetStream ack per publish, an outbox row and transaction, retention, lost cancellation).
-- SSE layering: the codec in go-core, the HTTP writer in go-web-sdk, go-ai on go-core's codec, built as `.bunrei` tasks (it holds the exclusive group); context-tools waits on them and is the writer's first consumer. Rejected: a Mikoshi-local relay package, tmaxmax/go-sse, r3labs/sse.
+- SSE layering: the codec in go-core, the HTTP writer in go-web-sdk, go-ai on go-core's codec, built as Mikoshi's `sse-codec`, `sse-writer`, and `go-ai-sse` before `context-tools`, the writer's first consumer. Rejected: a Mikoshi-local relay package, tmaxmax/go-sse, r3labs/sse.
 - context-tools: SSE holds under replicas (request-scoped, no sticky sessions); settle ingress buffering and idle timeout, HTTP/2, and the drain policy for in-flight answers there.
 - evidence 15 (the browser's event transport, NATS over WebSocket or a relay) is decided in its own task; a relay would be an SSE-backed `EventSequence`, stateless per replica over JetStream.
 - client routes (contexts, items): address by id, or keep the last segment free of dots; go-web-sdk's `NewClient` answers a last segment with an extension as an asset (a 404 problem), never the shell.
@@ -47,3 +55,4 @@
 - coordinator · retro topic: settle how a document references another repository's document. lint-references can't resolve `context/chunks.md` in capstone-data-intelligence, so Mikoshi's migration headers link it by GitHub URL.
 - coordinator · roadmap/context-tree-graduation.toml: add `context = ["capstone-mikoshi/docs/contexts.md"]`, the tree's design, including the native tree lock that the library replaces with blobfs's standard-tier fallback.
 - coordinator · retro topic: go-database's admin service checks statements in `Verify` only through a `Seeder`, so a service with statements and no seed states can't have `POST /admin/database/schema/verify` check them. Mikoshi checks its statements at startup instead (`data.Database.Verify`, docs/admin.md).
+- capstone-data-intelligence · context/upload.md, context/protocol.md, and the foundation record's protocol Decision: name `.mikoshi` `upload` where they name `.bunrei` `upload`.
