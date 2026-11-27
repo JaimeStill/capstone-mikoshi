@@ -47,5 +47,5 @@ jobs:
         run: |
           mise -C web run build
 
-      - name: go test -tags integration
-        run: go test -race -count=1 -tags integration ./integration/
+      - name: mise run integration
+        run: mise run integration

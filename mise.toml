@@ -4,6 +4,7 @@ task.run_auto_install = false
 
 [tools]
 "aqua:air-verse/air" = "1.67.4"
+"aqua:google/go-containerregistry" = "0.22.1"
 "github:standards-lab/claude-plugins" = { version = "0.24.1", version_prefix = "marathon/v" }
 go = "1.27.4"
 golangci-lint = "2.15.0"
@@ -48,25 +49,12 @@ exit "$fail"
 '''
 
 [tasks.currency]
-description = "Report every requirement, Go version, tool, and action pin behind its latest, running the script through bash since gonew drops its executable bit; writes nothing"
-run = "bash scripts/currency.sh"
+description = "Report every mise tool, Go version, requirement, action pin, image tag, and Dockerfile source ARG behind its latest, a held one with its reason, running the script through bash since gonew drops its executable bit; writes nothing"
+run = "bash scripts/currency.sh report"
 
 [tasks.upgrade]
-description = "Upgrade every module's go directive to the current Go minor with no toolchain line, its direct requirements, and the local mise tools to their latest, rewriting go.mod and mise.toml"
-run = '''
-set -eu
-export GOWORK=off
-go_minor=$(mise latest go | cut -d. -f1,2)
-for mod in $GO_MODULES; do
-  cd "$MISE_PROJECT_ROOT/$mod"
-  go mod edit -go="$go_minor" -toolchain=none
-  direct=$(go mod edit -json | jq -r '.Require[]? | select(.Indirect | not) | .Path')
-  [ -z "$direct" ] || go get $(printf '%s@latest ' $direct)
-  go mod tidy
-done
-cd "$MISE_PROJECT_ROOT"
-mise upgrade --bump --local
-'''
+description = "Bump the mise tools, then each module's go directive (to the current Go minor, with no toolchain line) and direct requirements, with a tidy, then the action pins, image tags, Dockerfile FROM tags, and Dockerfile source ARGs, to their latest, but a held one; rewrites mise.toml, go.mod, go.sum, the workflows, and the compose files"
+run = "bash scripts/currency.sh upgrade"
 
 [tasks.build]
 description = "Build the module"
@@ -88,8 +76,14 @@ run = "go test -race ./..."
 
 [tasks.integration]
 depends = ["client:build"]
-description = "Run the integration tier against the built service, as a subprocess"
-run = "go test -race -count=1 -tags integration ./integration/"
+description = "Start the isolated integration stack (PostgreSQL on tmpfs, on POSTGRES_PORT, default 5441), run the integration tier against the built service as a subprocess, print the stack's logs on a failure, and tear the stack down"
+run = '''
+set -e
+export COMPOSE_PROJECT_NAME=mikoshi-integration COMPOSE_PROFILES=integration
+trap 'rc=$?; [ $rc -eq 0 ] || docker compose logs; docker compose down; exit $rc' EXIT
+docker compose up -d --wait --build postgres-integration
+go test -race -count=1 -tags integration ./integration/
+'''
 
 [tasks.fmt]
 description = "Format all Go source"
@@ -102,6 +96,18 @@ run = "go mod tidy"
 [tasks.lint]
 description = "Run golangci-lint, the integration suite included"
 run = "golangci-lint run --build-tags integration ./..."
+
+[tasks."db:up"]
+description = "Build and start the development PostgreSQL (on POSTGRES_PORT, default 5440) and wait until it is healthy"
+run = "docker compose up -d --wait --build"
+
+[tasks."db:down"]
+description = "Stop the development PostgreSQL, keeping its volume"
+run = "docker compose down"
+
+[tasks."db:reset"]
+description = "Stop the development PostgreSQL and drop its volume"
+run = "docker compose down -v"
 
 [tasks."client:build"]
 description = "Build the web client in web with its own mise run build"

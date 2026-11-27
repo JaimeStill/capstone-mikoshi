@@ -1,0 +1,7 @@
+# Mikoshi's PostgreSQL stacks: the development stack, and the integration stack under the
+# integration profile.
+# See architecture/standards/go-elemental/principles/release-and-ci.md
+name: mikoshi
+
+include:
+  - compose/postgres.yml

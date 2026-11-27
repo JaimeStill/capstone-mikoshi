@@ -1,0 +1,22 @@
+# PostgreSQL with pgvector, built from compose/postgres/Dockerfile: postgres keeps its data in a
+# named volume, and postgres-integration, under the integration profile, keeps it on tmpfs.
+# See architecture/standards/go-elemental/principles/release-and-ci.md
+services:
+  postgres:
+    build:
+      context: postgres
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5440}:5432"
+    volumes:
+      - mikoshi-postgres:/var/lib/postgresql
+
+  postgres-integration:
+    profiles: [integration]
+    build:
+      context: postgres
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5441}:5432"
+    tmpfs: /var/lib/postgresql
+
+volumes:
+  mikoshi-postgres:
