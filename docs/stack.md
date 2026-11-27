@@ -44,9 +44,16 @@ review.
 sqlint holds each statement file to its tier. `mise run check` runs it under
 [`sqlint.toml`](../sqlint.toml), which fails a statement file in `domain/*/statements` or
 `data/statements` that is headed `tier: standard` and uses a native form PostgreSQL or pgvector
-declares. One statement file is native tier:
-[`data/statements/lock.sql`](../data/statements/lock.sql), the context tree's advisory lock,
-`pg_advisory_xact_lock` over `hashtext`. sqlint does not check the migrations' forms, so review
+declares. Three statement files are native tier, each headed `tier: native` with the form it
+uses and its ports:
+
+- [`data/statements/lock.sql`](../data/statements/lock.sql), the context tree's advisory lock,
+  `pg_advisory_xact_lock` over `hashtext`.
+- [`domain/items/statements/claim_stale_blob.sql`](../domain/items/statements/claim_stale_blob.sql)
+  and [`claim_orphan_blob.sql`](../domain/items/statements/claim_orphan_blob.sql), the blob
+  reclaimers' claims, `SELECT ... FOR UPDATE SKIP LOCKED` ([Items](items.md#reclamation)).
+
+sqlint does not check the migrations' forms, so review
 holds the migrations list below.
 
 ## What a provider swap changes
@@ -75,9 +82,13 @@ migrations below, and leaves the configuration's shape and the other packages as
   for the creation and update times.
 - `0012_item`: the `~` `CHECK` on the item's SHA-256, and `timestamptz` with its `now()` default
   for the creation time.
+- `0013_context_item`: `timestamptz` with its `now()` default for the creation time.
 
 A port also changes the native statement files:
 
 - `data/statements/lock.sql`: the advisory lock. Its header names the replacements:
   `sp_getapplock` (SQL Server), `GET_LOCK` (MySQL), `DBMS_LOCK` (Oracle), or a `FOR UPDATE`
   mutex row.
+- `domain/items/statements/claim_stale_blob.sql` and `claim_orphan_blob.sql`: the claim that
+  locks a row and skips one another transaction holds. Their headers name the replacements:
+  `UPDLOCK` with `READPAST` (SQL Server), or `FOR UPDATE SKIP LOCKED` (MySQL 8).

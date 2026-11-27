@@ -57,7 +57,8 @@ check with a 400 that names the failing condition's index. The items domain eval
 ## Membership and retrieval
 
 Membership belongs to the items domain, which places an item in an explicit context with `PUT
-/api/contexts/{id}/items/{item}` and withdraws it with `DELETE` on the same path. Its table,
+/api/contexts/{id}/items/{item}`, withdraws it with `DELETE` on the same path, and pages the items
+a context covers with `GET /api/contexts/{id}/items` ([Items](items.md)). Its table,
 `context_item`, cascades from `context`, so a context's memberships are deleted with the context,
 by the delete of its subtree.
 
@@ -85,6 +86,9 @@ The routes mount under `/api`. A context reads as its `id`, `parent_id` (null at
 
 The children read takes `page` and `size`, or the `cursor` the previous page returned, and
 refuses `sort` and `filter`. A query context's children are an empty page.
+
+The items domain mounts its routes under the same prefix: `GET /api/contexts/{id}/items`, and
+`PUT` and `DELETE` on `/api/contexts/{id}/items/{item}` ([Items](items.md#the-http-api)).
 
 Every refusal is a problem response:
 
@@ -118,7 +122,7 @@ ancestor walk, the descendant count. The lock keeps any concurrent change from l
 the read and the write, so two opposing moves (A under B, B under A) cannot both commit. The lock is `pg_advisory_xact_lock` over the
 name `context.tree`, from the lock registry in [`data/locks.go`](../data/locks.go), released
 when the transaction ends. Its statement, [`data/statements/lock.sql`](../data/statements/lock.sql),
-is Mikoshi's one native-tier statement.
+is native tier ([Stack](stack.md#standard-and-native-tiers)).
 
 A rename takes no lock. Its one statement changes no context's parent, so it cannot make a cycle
 or orphan a subtree, and the sibling-name constraint refuses a duplicate name against every

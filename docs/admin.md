@@ -33,8 +33,8 @@ Mikoshi declares no seed states, so `states` lists none, and `seed` and a confir
 answer 403 with the disabled seed as the detail. A reset emits no event.
 
 `up`, `down`, `steps`, and `state` change the schema, so each holds the process's quiesce gate
-exclusively. Nothing else holds the gate yet, so these verbs only exclude one another. The gate
-is per process.
+exclusively. They exclude one another and the sweeper, which holds the gate shared for each
+of its passes ([Items](items.md#reclamation)). The gate is per process.
 
 The admin mount serves on the API listener, unauthenticated. It is not for a public deployment
 until a management listener gives it a listener of its own.
