@@ -38,7 +38,7 @@ func TestGraph_ReadinessChecks(t *testing.T) {
 	for _, c := range lifecycle.New(sys, cfg.Config).Checks() {
 		got = append(got, c.Name)
 	}
-	if want := []string{"database", "storage", "schema"}; !slices.Equal(got, want) {
+	if want := []string{"database", "storage", "schema", "sweeper"}; !slices.Equal(got, want) {
 		t.Errorf("checks = %v, want %v\nlayers:\n%s", got, want, sys)
 	}
 }
@@ -146,6 +146,48 @@ func TestGraph_ServerReachesTheStorageThroughItems(t *testing.T) {
 	if slices.Contains(a.Roots(), graph.Ref(n.Storage)) {
 		t.Errorf("roots = %v, want the storage reached through the items, not listed", a.Roots())
 	}
+}
+
+func TestGraph_SweeperIsAReactorAboveTheSchema(t *testing.T) {
+	a := app.New(configtest.Config(t), io.Discard)
+	n := a.Nodes()
+	members, err := a.Graph().Build(n.Reactors)
+	if err != nil {
+		t.Fatalf("Build of %s: %v", n.Reactors.Name(), err)
+	}
+	if !members.Has(n.Sweeper) {
+		t.Fatalf("%s is not a member of %s\nlayers:\n%s", n.Sweeper.Name(), n.Reactors.Name(), members)
+	}
+
+	sys := buildAsRun(t, a)
+	if sys.LayerOf(n.Schema) >= sys.LayerOf(n.Sweeper) {
+		t.Errorf("%s in layer %d, %s in layer %d; want the sweeper above the schema\nlayers:\n%s",
+			n.Schema.Name(), sys.LayerOf(n.Schema), n.Sweeper.Name(), sys.LayerOf(n.Sweeper), sys)
+	}
+	if err := serverAlone(sys, n.Server); err != nil {
+		t.Error(err)
+	}
+}
+
+func TestGraph_SweeperRegistersEachDomainsReclaimer(t *testing.T) {
+	a := app.New(configtest.Config(t), io.Discard)
+	sweeper := buildAsRun(t, a).Get(a.Nodes().Sweeper)
+	for _, name := range []string{"expired_uploads", "pending_blobs"} {
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Errorf("Nudge(%q) panicked: %v; want the reclaimer registered", name, r)
+				}
+			}()
+			sweeper.Nudge(name)
+		}()
+	}
+	defer func() {
+		if recover() == nil {
+			t.Error("Nudge of an unregistered name did not panic; want only the domains' reclaimers registered")
+		}
+	}()
+	sweeper.Nudge("unregistered")
 }
 
 func runSet(a *app.App, extra ...graph.Ref) []graph.Ref {

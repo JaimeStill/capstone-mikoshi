@@ -11,6 +11,7 @@ import (
 	"github.com/standards-lab/go-core/lifecycle"
 	"github.com/standards-lab/go-core/reactor"
 	"github.com/standards-lab/go-database"
+	"github.com/standards-lab/go-database/sweep"
 	"github.com/standards-lab/go-storage"
 	"github.com/standards-lab/go-web-sdk"
 
@@ -71,7 +72,10 @@ type Nodes struct {
 	// Reactors (reactors.go): the group each reactor joins with graph.In.
 	// A reactor is reached by no Use, so the group is one of [App.Roots],
 	// and the server orders itself after it so it stays the top layer.
+	// The sweeper is go-database's sweeper, which runs the domains'
+	// reclaimers, each on its policy from the configuration's sweep block.
 	Reactors *graph.Group
+	Sweeper  *graph.Node[*sweep.Sweeper]
 
 	// The request edge (server.go).
 	Readiness *graph.Node[*lifecycle.Readiness]

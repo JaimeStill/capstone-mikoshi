@@ -17,6 +17,14 @@ const (
 	// shape, so a change that reads the tree before it writes, as a create
 	// reads its parent, meets no concurrent change between the two.
 	LockContextTree = "context.tree"
+
+	// LockSweepPrefix begins the names go-database's sweeper claims, one
+	// per reclaimer, "sweep.<name>" ("sweep.pending_blobs"), so no name
+	// declared here may begin with it. The sweeper takes them itself,
+	// without Lock: each is a session lock its cycle tries without waiting
+	// on a pinned connection, so two replicas never run one reclaimer's
+	// cycle at once.
+	LockSweepPrefix = "sweep."
 )
 
 // Lock takes the named advisory lock for the rest of the transaction s

@@ -68,3 +68,24 @@ func (s *Service) Open(ctx context.Context, id string) (io.ReadCloser, error) {
 func (s *Service) Delete(ctx context.Context, id string) error {
 	return s.store.remove(ctx, id)
 }
+
+// Reclaimer returns the expired uploads' reclaimer over the service's
+// store, which go-database's sweeper runs.
+func (s *Service) Reclaimer() *Reclaimer {
+	return &Reclaimer{store: s.store}
+}
+
+// Reclaimer is the expired uploads' reclaimer, a go-database
+// sweep.Reclaimer, which it satisfies structurally: each pass deletes
+// expired uploads, by the database's clock, and by cascade their chunks.
+type Reclaimer struct {
+	store *store
+}
+
+// Pass deletes at most budget expired uploads, earliest expiry first, and
+// their chunks, and reports more when it deleted budget of them, so a
+// further pass may find more.
+func (r *Reclaimer) Pass(ctx context.Context, budget int) (more bool, err error) {
+	n, err := r.store.reclaimExpired(ctx, budget)
+	return err == nil && n >= int64(budget), err
+}

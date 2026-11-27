@@ -15,7 +15,7 @@ const envPrefix = "mikoshi"
 
 // Config is the service's root configuration: the library capability blocks
 // (the database and the object store among them) plus the service-owned
-// read and upload policies. It embeds
+// read, upload, and sweep policies. It embeds
 // the lifecycle Coordinator's configuration by value and untagged, so its
 // shutdown_timeout is a top-level key and ShutdownTimeout a promoted field;
 // Config.Config is that lifecycle block, the one the composition root hands
@@ -29,6 +29,7 @@ type Config struct {
 	Storage  storage.Config  `json:"storage"`
 	Reads    ReadsConfig     `json:"reads"`
 	Uploads  UploadsConfig   `json:"uploads"`
+	Sweep    SweepConfig     `json:"sweep"`
 }
 
 // Merge overlays src's set fields onto the receiver, delegating each block
@@ -44,6 +45,7 @@ func (c *Config) Merge(src *Config) {
 	c.Storage.Merge(&src.Storage)
 	c.Reads.Merge(&src.Reads)
 	c.Uploads.Merge(&src.Uploads)
+	c.Sweep.Merge(&src.Sweep)
 }
 
 // Finalize finalizes each block under the same prefix, the lifecycle block
@@ -75,6 +77,9 @@ func (c *Config) Finalize(envPrefix string) error {
 	}
 	if err := c.Uploads.Finalize(envPrefix); err != nil {
 		return fmt.Errorf("uploads: %w", err)
+	}
+	if err := c.Sweep.Finalize(envPrefix); err != nil {
+		return fmt.Errorf("sweep: %w", err)
 	}
 	return nil
 }

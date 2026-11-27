@@ -469,3 +469,112 @@ func TestStorage_FinalizeRequiresContainer(t *testing.T) {
 		t.Errorf("error = %v, want the storage block wrap naming the container", err)
 	}
 }
+
+func TestSweep_FinalizeDefaults(t *testing.T) {
+	cfg := configtest.Minimal()
+	if err := cfg.Finalize(""); err != nil {
+		t.Fatalf("Finalize: %v", err)
+	}
+
+	s := cfg.Sweep
+	if got := s.ExpiredUploads.Interval.Duration(); got != time.Minute || *s.ExpiredUploads.Budget != 100 {
+		t.Errorf("ExpiredUploads = {%s %d}, want {1m 100}", got, *s.ExpiredUploads.Budget)
+	}
+	if got := s.PendingBlobs.Interval.Duration(); got != 5*time.Minute || *s.PendingBlobs.Budget != 100 {
+		t.Errorf("PendingBlobs = {%s %d}, want {5m 100}", got, *s.PendingBlobs.Budget)
+	}
+	if got := s.PendingBlobs.StaleAge.Duration(); got != time.Hour {
+		t.Errorf("PendingBlobs.StaleAge = %s, want 1h", got)
+	}
+	if s.Env != (config.SweepEnv{}) {
+		t.Errorf("Sweep.Env = %+v, want empty under the empty prefix", s.Env)
+	}
+}
+
+func TestSweep_MergeOverlaysSetFields(t *testing.T) {
+	base := &config.Config{}
+	base.Sweep.ExpiredUploads.Interval = new(libconfig.Duration(time.Hour))
+	base.Sweep.ExpiredUploads.Budget = new(10)
+	base.Sweep.PendingBlobs.StaleAge = new(libconfig.Duration(time.Hour))
+
+	overlay := &config.Config{}
+	overlay.Sweep.ExpiredUploads.Budget = new(20)
+	overlay.Sweep.PendingBlobs.Interval = new(libconfig.Duration(time.Minute))
+	overlay.Sweep.PendingBlobs.StaleAge = new(libconfig.Duration(2 * time.Hour))
+
+	base.Merge(overlay)
+
+	s := base.Sweep
+	if got := s.ExpiredUploads.Interval.Duration(); got != time.Hour || *s.ExpiredUploads.Budget != 20 {
+		t.Errorf("ExpiredUploads = {%s %d}, want {1h 20}", got, *s.ExpiredUploads.Budget)
+	}
+	if got := s.PendingBlobs.Interval.Duration(); got != time.Minute || s.PendingBlobs.Budget != nil {
+		t.Errorf("PendingBlobs = {%s %v}, want {1m unset}", got, s.PendingBlobs.Budget)
+	}
+	if got := s.PendingBlobs.StaleAge.Duration(); got != 2*time.Hour {
+		t.Errorf("PendingBlobs.StaleAge = %s, want 2h", got)
+	}
+}
+
+func TestSweep_FinalizeEnvOverrides(t *testing.T) {
+	t.Setenv("MIKOSHI_SWEEP_EXPIRED_UPLOADS_INTERVAL", "30s")
+	t.Setenv("MIKOSHI_SWEEP_EXPIRED_UPLOADS_BUDGET", "50")
+	t.Setenv("MIKOSHI_SWEEP_PENDING_BLOBS_INTERVAL", "10m")
+	t.Setenv("MIKOSHI_SWEEP_PENDING_BLOBS_BUDGET", "7")
+	t.Setenv("MIKOSHI_SWEEP_PENDING_BLOBS_STALE_AGE", "90m")
+
+	cfg := configtest.Minimal()
+	if err := cfg.Finalize("mikoshi"); err != nil {
+		t.Fatalf("Finalize: %v", err)
+	}
+
+	s := cfg.Sweep
+	if got := s.ExpiredUploads.Interval.Duration(); got != 30*time.Second || *s.ExpiredUploads.Budget != 50 {
+		t.Errorf("ExpiredUploads = {%s %d}, want {30s 50}", got, *s.ExpiredUploads.Budget)
+	}
+	if got := s.PendingBlobs.Interval.Duration(); got != 10*time.Minute || *s.PendingBlobs.Budget != 7 {
+		t.Errorf("PendingBlobs = {%s %d}, want {10m 7}", got, *s.PendingBlobs.Budget)
+	}
+	if got := s.PendingBlobs.StaleAge.Duration(); got != 90*time.Minute {
+		t.Errorf("PendingBlobs.StaleAge = %s, want 1h30m", got)
+	}
+	want := config.SweepEnv{
+		ExpiredUploadsInterval: "MIKOSHI_SWEEP_EXPIRED_UPLOADS_INTERVAL",
+		ExpiredUploadsBudget:   "MIKOSHI_SWEEP_EXPIRED_UPLOADS_BUDGET",
+		PendingBlobsInterval:   "MIKOSHI_SWEEP_PENDING_BLOBS_INTERVAL",
+		PendingBlobsBudget:     "MIKOSHI_SWEEP_PENDING_BLOBS_BUDGET",
+		PendingBlobsStaleAge:   "MIKOSHI_SWEEP_PENDING_BLOBS_STALE_AGE",
+	}
+	if s.Env != want {
+		t.Errorf("Sweep.Env = %+v, want %+v", s.Env, want)
+	}
+}
+
+func TestSweep_FinalizeRejectsInvalidPolicy(t *testing.T) {
+	cases := map[string]struct {
+		variable, value string
+		want            string
+	}{
+		"expired uploads interval zero":          {"MIKOSHI_SWEEP_EXPIRED_UPLOADS_INTERVAL", "0s", "expired_uploads.interval"},
+		"expired uploads budget zero":            {"MIKOSHI_SWEEP_EXPIRED_UPLOADS_BUDGET", "0", "expired_uploads.budget"},
+		"expired uploads budget not a number":    {"MIKOSHI_SWEEP_EXPIRED_UPLOADS_BUDGET", "lots", "MIKOSHI_SWEEP_EXPIRED_UPLOADS_BUDGET"},
+		"pending blobs interval negative":        {"MIKOSHI_SWEEP_PENDING_BLOBS_INTERVAL", "-1m", "pending_blobs.interval"},
+		"pending blobs budget negative":          {"MIKOSHI_SWEEP_PENDING_BLOBS_BUDGET", "-3", "pending_blobs.budget"},
+		"pending blobs stale age zero":           {"MIKOSHI_SWEEP_PENDING_BLOBS_STALE_AGE", "0s", "pending_blobs.stale_age"},
+		"pending blobs stale age not a duration": {"MIKOSHI_SWEEP_PENDING_BLOBS_STALE_AGE", "soon", "MIKOSHI_SWEEP_PENDING_BLOBS_STALE_AGE"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv(tc.variable, tc.value)
+
+			cfg := configtest.Minimal()
+			err := cfg.Finalize("mikoshi")
+			if err == nil {
+				t.Fatal("Finalize accepted an invalid sweep policy")
+			}
+			if !strings.Contains(err.Error(), "sweep:") || !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("error = %v, want the sweep block wrap naming %s", err, tc.want)
+			}
+		})
+	}
+}

@@ -34,6 +34,8 @@ type store struct {
 	markBlob    query.Statement
 	placeRef    query.Statement
 	withdrawRef query.Statement
+	claimStale  query.Rows[string]
+	reclaimBlob query.Statement
 }
 
 func newStore(db *data.Database, objects *storage.Store) *store {
@@ -53,6 +55,8 @@ func newStore(db *data.Database, objects *storage.Store) *store {
 		markBlob:    stmts.Statement("mark_blob"),
 		placeRef:    stmts.Statement("place"),
 		withdrawRef: stmts.Statement("withdraw"),
+		claimStale:  stmts.Statement("claim_stale_blob").Scan(query.Scalar[string]),
+		reclaimBlob: stmts.Statement("reclaim_blob"),
 	}
 	db.Register("items", stmts, s)
 	return s

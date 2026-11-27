@@ -7,7 +7,8 @@
 //
 //   - [Database], built by [New]: the session and the catalog the domains
 //     compile their statements against; [Database.Lock] takes an advisory
-//     lock named in the lock registry ([LockContextTree]).
+//     lock named in the lock registry ([LockContextTree]), which also
+//     reserves the prefix of the sweeper's own claims ([LockSweepPrefix]).
 //   - The statements registry on [Database]: each domain's store calls
 //     [Database.Register] at wiring with its compiled inventory and itself
 //     as the verifier, and [Database.Record] adds a verifier with no

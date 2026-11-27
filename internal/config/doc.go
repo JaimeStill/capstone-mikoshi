@@ -1,7 +1,7 @@
 // Package config declares the service's layered configuration.
 //
 //   - [Config] is the root: the library capability blocks (log, server,
-//     database, storage), the service-owned read and upload policies, and
+//     database, storage), the service-owned read, upload, and sweep policies, and
 //     the shutdown timeout. The database block's password and the storage block's key
 //     come from the secrets file (secrets.json, gitignored, shaped as
 //     secrets.example.json) or MIKOSHI_DATABASE_PASSWORD and
@@ -21,6 +21,12 @@
 //     max-append-size the upload handler announces and enforces, which
 //     bounds a posted record's body too. [UploadsEnv] records the environment-variable names its Finalize
 //     read.
+//   - [SweepConfig] is the service-owned sweep policy, with its own Merge
+//     and Finalize: a [SweepPolicy], the interval and budget, for each
+//     reclaimer the sweeper runs, the pending blobs' a
+//     [PendingBlobsPolicy] that adds the age past which a pending blob row
+//     is stale. [SweepEnv] records the environment-variable names its
+//     Finalize read.
 //   - [Load] reads the layered files, decoding each strictly, and finalizes
 //     the result under the service's env prefix.
 //

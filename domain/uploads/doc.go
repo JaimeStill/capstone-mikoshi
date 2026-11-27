@@ -12,10 +12,14 @@
 // winner's offset. The store takes no lock or lease of its own. An upload
 // past its expiry, by the database's clock, is missing to every
 // operation; a create reclaims an expired upload under its id, and the
-// expired uploads' rows stay until they are reclaimed.
+// expired uploads' rows stay until they are reclaimed, by such a create
+// or by the [Reclaimer] go-database's sweeper runs, which deletes them,
+// earliest expiry first, in budgeted batches.
 //
 // The package's API:
 //
 //   - [Service], built by [New]: the upload.Store, each method returning
 //     an error that matches fs.ErrNotExist for a missing upload.
+//   - [Reclaimer], from [Service.Reclaimer]: the expired uploads'
+//     go-database sweep.Reclaimer.
 package uploads

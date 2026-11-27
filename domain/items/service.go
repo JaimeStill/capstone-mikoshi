@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"time"
 	"uuid"
 
 	"github.com/standards-lab/docproc/route"
@@ -263,4 +264,34 @@ func sniff(content io.ReaderAt, size int64, name, mediaType string) (string, *st
 		kind = new(string(k))
 	}
 	return string(r), kind, nil
+}
+
+// PendingReclaimer returns the pending blobs' reclaimer over the service's
+// store, which go-database's sweeper runs: it reclaims a blob row left
+// pending since more than staleAge ago.
+func (s *Service) PendingReclaimer(staleAge time.Duration) *PendingReclaimer {
+	return &PendingReclaimer{store: s.store, staleAge: staleAge}
+}
+
+// PendingReclaimer is the pending blobs' reclaimer, a go-database
+// sweep.Reclaimer, which it satisfies structurally: each pass removes the
+// blob rows a create left pending, and their objects, once they are stale.
+type PendingReclaimer struct {
+	store    *store
+	staleAge time.Duration
+}
+
+// Pass reclaims at most budget blob rows left pending since more than the
+// stale age ago, by the database's clock, that no item names, the stalest
+// first, each in a transaction of its own: it locks the row, skipping one
+// a create holds, deletes its object at sha256/<hex>, a missing object
+// included, while it holds the lock, and then deletes the row. A create
+// that touches the row meanwhile waits, then finds no row and starts
+// over; one that touched it first has made it fresh, and the pass skips
+// it. A failed object delete leaves the row for a later pass and ends
+// this one with the error. Pass reports more when it reclaimed budget
+// rows, so a further pass may find more.
+func (r *PendingReclaimer) Pass(ctx context.Context, budget int) (more bool, err error) {
+	n, err := r.store.reclaimPending(ctx, r.staleAge, budget)
+	return err == nil && n >= budget, err
 }

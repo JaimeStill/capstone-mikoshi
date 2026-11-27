@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"io"
+	"time"
 
 	"github.com/standards-lab/go-storage"
 	"github.com/standards-lab/sqlate"
@@ -105,4 +106,33 @@ func (s *store) settle(ctx context.Context, n newItem, err error) (Item, error) 
 		}
 	}
 	return Item{}, err
+}
+
+func (s *store) reclaimPending(ctx context.Context, staleAge time.Duration, budget int) (int, error) {
+	for n := range budget {
+		reclaimed, err := s.reclaimStale(ctx, staleAge)
+		if err != nil || !reclaimed {
+			return n, err
+		}
+	}
+	return budget, nil
+}
+
+func (s *store) reclaimStale(ctx context.Context, staleAge time.Duration) (bool, error) {
+	return s.db.Transact(ctx, func(tx *sqlate.Tx) (bool, error) {
+		digest, err := s.claimStale.One(ctx, tx, query.Args{"stale_age": staleAge})
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
+		if err := s.objects.Delete(ctx, blobKey(digest)); err != nil {
+			return false, err
+		}
+		if _, err := s.reclaimBlob.Exec(ctx, tx, query.Args{"sha256": digest}); err != nil {
+			return false, err
+		}
+		return true, nil
+	}, nil)
 }

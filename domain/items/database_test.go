@@ -849,3 +849,108 @@ func TestStore_RegistersAndVerifiesEveryStatement(t *testing.T) {
 		t.Errorf("list fields = %v, want %v", fields, want)
 	}
 }
+
+func staleRow(content []byte) sqltest.Response {
+	return sqltest.Response{Columns: []string{"sha256"}, Rows: [][]driver.Value{{digest(content)}}}
+}
+
+func putObject(t *testing.T, f fixture, content []byte) {
+	t.Helper()
+	if _, err := f.fake.Put(t.Context(), "sha256/"+digest(content), bytes.NewReader(content), storage.PutOptions{Size: int64(len(content))}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func hasObject(t *testing.T, f fixture, content []byte) bool {
+	t.Helper()
+	_, err := f.fake.Stat(t.Context(), "sha256/"+digest(content))
+	if err != nil && !errors.Is(err, storage.ErrNotFound) {
+		t.Fatal(err)
+	}
+	return err == nil
+}
+
+func TestPendingReclaimer_PassLocksTheStaleRowDeletesItsObjectThenTheRow(t *testing.T) {
+	f := service(t, staleRow(pdf), affected(1), none())
+	putObject(t, f, pdf)
+	more, err := f.service.PendingReclaimer(time.Hour).Pass(t.Context(), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if more {
+		t.Error("more = true after the claim found no further stale row, want false")
+	}
+	sameOps(t, f.rec, begin, q, x, commit, begin, q, commit)
+	if hasObject(t, f, pdf) {
+		t.Error("the stale blob's object is still stored")
+	}
+
+	claims := callsTo(f.rec, "SELECT sha256 FROM blob")
+	if len(claims) != 2 {
+		t.Fatalf("claims = %+v, want two", claims)
+	}
+	for _, want := range []string{"status = 'pending'", "updated_at < CURRENT_TIMESTAMP - CAST($1 AS interval)", "NOT EXISTS (SELECT 1 FROM item", "FETCH FIRST 1 ROWS ONLY", "FOR UPDATE SKIP LOCKED"} {
+		if !strings.Contains(claims[0].SQL, want) {
+			t.Errorf("claim = %q, want it to contain %q", claims[0].SQL, want)
+		}
+	}
+	if !slices.Equal(claims[0].Args, []any{time.Hour}) {
+		t.Errorf("claim args = %v, want the stale age", claims[0].Args)
+	}
+	if del := callsTo(f.rec, "DELETE FROM blob"); len(del) != 1 || !strings.Contains(del[0].SQL, "status = 'pending'") || !slices.Equal(del[0].Args, []any{digest(pdf)}) {
+		t.Errorf("row delete = %+v, want the claimed pending row deleted by its digest", del)
+	}
+}
+
+func TestPendingReclaimer_PassStopsAtTheBudget(t *testing.T) {
+	other := []byte("%PDF-1.7\nanother stale blob\n%%EOF\n")
+	f := service(t, staleRow(pdf), affected(1), staleRow(other), affected(1))
+	putObject(t, f, pdf)
+	putObject(t, f, other)
+	more, err := f.service.PendingReclaimer(time.Hour).Pass(t.Context(), 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !more {
+		t.Error("more = false after reclaiming the whole budget, want true")
+	}
+	sameOps(t, f.rec, begin, q, x, commit, begin, q, x, commit)
+	if hasObject(t, f, pdf) || hasObject(t, f, other) {
+		t.Error("a reclaimed blob's object is still stored")
+	}
+}
+
+func TestPendingReclaimer_PassOverAMissingObjectDeletesTheRow(t *testing.T) {
+	f := service(t, staleRow(pdf), affected(1), none())
+	if more, err := f.service.PendingReclaimer(time.Hour).Pass(t.Context(), 10); err != nil || more {
+		t.Fatalf("Pass = %t, %v; want no more and no error", more, err)
+	}
+	sameOps(t, f.rec, begin, q, x, commit, begin, q, commit)
+}
+
+func TestPendingReclaimer_PassWithNothingStaleChangesNothing(t *testing.T) {
+	f := service(t, none())
+	putObject(t, f, pdf)
+	if more, err := f.service.PendingReclaimer(time.Hour).Pass(t.Context(), 10); err != nil || more {
+		t.Fatalf("Pass = %t, %v; want no more and no error", more, err)
+	}
+	sameOps(t, f.rec, begin, q, commit)
+	if !hasObject(t, f, pdf) {
+		t.Error("an object was deleted with no stale row claimed")
+	}
+}
+
+func TestPendingReclaimer_PassKeepsTheRowWhenTheObjectDeleteFails(t *testing.T) {
+	f := service(t, staleRow(pdf))
+	putObject(t, f, pdf)
+	f.fake.SetDown(true)
+	more, err := f.service.PendingReclaimer(time.Hour).Pass(t.Context(), 10)
+	if !errors.Is(err, storage.ErrUnavailable) || more {
+		t.Errorf("Pass = %t, %v; want no more and the object delete's failure", more, err)
+	}
+	sameOps(t, f.rec, begin, q, rollback)
+	f.fake.SetDown(false)
+	if !hasObject(t, f, pdf) {
+		t.Error("the object is gone although the delete failed")
+	}
+}

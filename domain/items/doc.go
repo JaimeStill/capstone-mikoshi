@@ -18,7 +18,12 @@
 // the transaction that locks the row, so a reclaimer that locks the row
 // to remove the content meets the item. A create that finds the row
 // pending, its own or one left behind, writes the object again, and one
-// that finds the row gone when it marks it starts over. A file create is
+// that finds the row gone when it marks it starts over. A row left pending
+// past a stale age is removed by the [PendingReclaimer] go-database's
+// sweeper runs: it locks the row, skipping one a create holds, deletes the
+// object while it holds the lock, then the row, so a create that touches
+// the row meanwhile waits and starts over, and one that touched it first
+// made it fresh, and the reclaimer passes it by. A file create is
 // idempotent on its upload's id, which the item keeps under a unique
 // constraint, so a repeated or overlapping completion returns the item
 // the first created. A record create is idempotent on nothing.
@@ -43,6 +48,8 @@
 //   - [Service], built by [New]: the reads, the covered read, the file
 //     create, the record create, and the reference's placing and
 //     withdrawing.
+//   - [PendingReclaimer], from [Service.PendingReclaimer]: the pending
+//     blobs' go-database sweep.Reclaimer.
 //   - [FilterFields]: the field contract a query context's filter is
 //     checked against.
 //   - [Routes] and [ReferenceRoutes]: the route groups the composition

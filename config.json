@@ -33,5 +33,16 @@
     "lifetime": "24h",
     "max_append_size": 4194304
   },
+  "sweep": {
+    "expired_uploads": {
+      "interval": "1m",
+      "budget": 100
+    },
+    "pending_blobs": {
+      "interval": "5m",
+      "budget": 100,
+      "stale_age": "1h"
+    }
+  },
   "shutdown_timeout": "10s"
 }

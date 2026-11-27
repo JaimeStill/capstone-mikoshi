@@ -50,6 +50,7 @@ type store struct {
 	appendChunk query.Statement
 	chunk       query.Rows[[]byte]
 	delete      query.Statement
+	expired     query.Statement
 }
 
 func newStore(db *data.Database) *store {
@@ -67,6 +68,7 @@ func newStore(db *data.Database) *store {
 		appendChunk: stmts.Statement("append_chunk"),
 		chunk:       stmts.Statement("chunk").Scan(query.Scalar[[]byte]),
 		delete:      stmts.Statement("delete"),
+		expired:     stmts.Statement("reclaim_expired"),
 	}
 	db.Register("uploads", stmts, s)
 	return s
@@ -165,6 +167,10 @@ func (s *store) remove(ctx context.Context, id string) error {
 		err = sql.ErrNoRows
 	}
 	return missing("delete", id, err)
+}
+
+func (s *store) reclaimExpired(ctx context.Context, budget int) (int64, error) {
+	return s.expired.Exec(ctx, s.db, query.Args{"budget": budget})
 }
 
 type reader struct {
