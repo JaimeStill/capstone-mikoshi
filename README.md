@@ -162,3 +162,5 @@ and those files are the build points:
 [Building out the service](docs/building-out.md) covers how the layer files define and mount
 their nodes, and walks through adding a domain service, an infrastructure service, an admin
 service, a reactor, middleware, and configuration.
+[Contexts](docs/contexts.md) covers the first domain service, the context tree under
+`/api/contexts`: its model, its filters, its routes, and its tree lock.

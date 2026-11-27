@@ -21,7 +21,9 @@ A domain service starts from its Entity:
 3. Build the layer's route group in its handler.
 4. Define the service's node in `defineDomain` and mount the group in `mountAPI` (`domain.go`).
 
-The constructor draws what it uses from the infrastructure nodes it `Use`s, and the handler is
+The constructor draws what it uses from the infrastructure nodes it `Use`s: a domain that keeps
+records takes the `SQL` node's `data.Database`, the session and the catalog its statements
+compile against, as `contexts.New(s.Use(n.SQL))` does ([Contexts](contexts.md)). The handler is
 handed its policy from the config node at the construction site (`cfg.Reads.Limits()` for a
 collection read) and the service's logger for its error writer (`web.NewErrorWriter(logger, ...)`).
 
