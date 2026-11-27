@@ -39,10 +39,10 @@
 // over, writing the object again, or touched the row first, and the
 // reclaimer passes it by.
 //
-// A file create is
-// idempotent on its upload's id, which the item keeps under a unique
-// constraint, so a repeated or overlapping completion returns the item
-// the first created. A record create is idempotent on nothing.
+// A file create is idempotent on its upload's id, which the item keeps
+// under a unique constraint, so a repeated or overlapping completion
+// returns the item the first created. A record create is idempotent on
+// nothing.
 //
 // A context covers the items referenced in every explicit context of its
 // subtree and the items each query context of the subtree selects from

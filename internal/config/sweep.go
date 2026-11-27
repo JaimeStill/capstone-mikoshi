@@ -94,11 +94,10 @@ func (p *SweepPolicy) merge(src *SweepPolicy) {
 // minute, the pending blobs' every five minutes, and the orphaned blobs'
 // every fifteen minutes, each pass reclaiming at most 100, a pending blob
 // row stale after an hour, and content no item names stale after a day;
-// reads the
-// block's environment overrides; and validates: every interval and the
-// stale age positive and every budget at least 1, the bounds the sweeper
-// refuses otherwise. An empty prefix composes empty names, which disable
-// the overrides.
+// reads the block's environment overrides; and validates: every interval
+// and the stale age positive and every budget at least 1, the bounds the
+// sweeper refuses otherwise. An empty prefix composes empty names, which
+// disable the overrides.
 func (c *SweepConfig) Finalize(envPrefix string) error {
 	c.Env = SweepEnv{
 		ExpiredUploadsInterval: libconfig.EnvName(envPrefix, "sweep_expired_uploads_interval"),

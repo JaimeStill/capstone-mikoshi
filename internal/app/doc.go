@@ -129,19 +129,19 @@
 // handler handed, at the construction site, its service, its policy from
 // the config node (cfg.Reads.Limits() for a collection read), and the
 // logger for its error writer (web.NewErrorWriter(logger, ...)). Mikoshi's
-// domain layers are contexts, the context tree, built over the sql node
-// and the items layer's FilterFields, the field contract its query
-// filters are checked against, and mounted at /api/contexts; uploads, the resumable uploads in
-// progress, built over the sql node; and items, built over the sql node,
-// the storage node, and the contexts node and mounted at /api/items, each
-// read with the read limits allowing a cursor. The items layer's reference
-// group mounts at /api/contexts beside the contexts layer's group, its
-// routes under /api/contexts/{id}/items, the covered items' read with the
-// same read limits. go-web-sdk's draft-16 upload handler mounts at
-// /api/uploads, on the client's origin and so with no CORS, over the
-// uploads service, with the lifetime and max-append-size of the
-// configuration's uploads block, the max-append-size as the limit of the
-// server block's Transfer, and the items layer's Completion as its
+// domain layers are contexts, the context tree, built over the sql node and
+// the items layer's FilterFields, the field contract its query filters are
+// checked against, and mounted at /api/contexts; uploads, the resumable
+// uploads in progress, built over the sql node; and items, built over the
+// sql node, the storage node, and the contexts node and mounted at
+// /api/items, each read with the read limits allowing a cursor. The items
+// layer's reference group mounts at /api/contexts beside the contexts
+// layer's group, its routes under /api/contexts/{id}/items, the covered
+// items' read with the same read limits. go-web-sdk's draft-16 upload
+// handler mounts at /api/uploads, on the client's origin and so with no
+// CORS, over the uploads service, with the lifetime and max-append-size of
+// the configuration's uploads block, the max-append-size as the limit of
+// the server block's Transfer, and the items layer's Completion as its
 // Complete, which answers with the item's Location under /api/items. The
 // items group's record create reads its body under that same Transfer.
 //

@@ -114,9 +114,8 @@ func (s *Service) Move(ctx context.Context, id string, m MoveContext) (Context, 
 }
 
 // Subtree resolves the context with the given id to its subtree, the
-// context included, each node with its kind and filter, in no stated
-// order. A
-// malformed id is ErrValidation and an unknown context sql.ErrNoRows.
+// context included, each node with its kind and filter, in no stated order.
+// A malformed id is ErrValidation and an unknown context sql.ErrNoRows.
 func (s *Service) Subtree(ctx context.Context, id string) ([]Node, error) {
 	if _, err := uuid.Parse(id); err != nil {
 		return nil, fmt.Errorf("%w: id must be a UUID", ErrValidation)

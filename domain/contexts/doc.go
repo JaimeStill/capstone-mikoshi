@@ -4,7 +4,7 @@
 // id, a paged read of a context's children by name, a rename, a move, and
 // a delete of a context's subtree.
 // The service also resolves a context to its subtree, each context with
-// its kind, for the domains that build on the tree.
+// its kind and filter, for the domains that build on the tree.
 //
 // A context is explicit or query, fixed at its creation. A query context
 // carries a filter, a non-empty list of conditions in the shape of
