@@ -8,6 +8,11 @@ Mikoshi runs on one declared stack, with one provider per capability.
   it runs in the image the compose file builds from
   [`compose/postgres/Dockerfile`](../compose/postgres/Dockerfile), with pgvector 0.8.7 compiled
   from source.
+- Object storage: an S3 bucket, through [go-storage](https://github.com/standards-lab/go-storage)'s
+  `s3` provider. Locally it is SeaweedFS's S3 gateway, in the image the compose file builds from
+  [`compose/seaweedfs/Dockerfile`](../compose/seaweedfs/Dockerfile), or the capstone stack's
+  gateway through `MIKOSHI_STORAGE_ENDPOINT=http://127.0.0.1:8335`. Mikoshi creates its bucket at
+  startup.
 
 ## Standard and native tiers
 
@@ -19,27 +24,36 @@ features. Everything pgvector adds (the `vector` type, the `hnsw` index method, 
 Only these packages import a provider or use pgvector:
 
 - The composition root, `internal/app`. `infrastructure.go` opens the pool through go-database's
-  `postgres` provider, and its `sql` node wraps the pool in sqlate's `postgres` dialect. `admin.go`
-  declares pgvector to the migrator by name, from sqlate's `postgres/pgvector`.
+  `postgres` provider, its `sql` node wraps the pool in sqlate's `postgres` dialect, and its
+  `storage` node wraps go-storage's `s3` client in a `storage.Store`. `admin.go` declares
+  pgvector to the migrator by name, from sqlate's `postgres/pgvector`.
 - The migrations, `data/migrations`, which create the `vector` column and space 1's HNSW index.
 - The admin domain, `admin/database`, through go-database's admin service alone: it reports
   pgvector's status in the schema status and imports no provider.
 
-Every other package stays provider-free: the admin service receives the pool as a go-database
-`database.DB`, and the domains receive the `sql` node's `data.Database`, the dialect-wrapped
-session and the pattern catalog their statements compile against. The integration harness and
-suite sit outside the service's process and reach the database directly: the harness makes each
-test's database through sqlate's `postgres/pgtest`, and the suite names pgvector from
-`postgres/pgvector` and runs pgvector queries to prove the index. The package boundary is a
-convention held in review.
+Every other package stays provider-free. The admin service receives the pool as a go-database
+`database.DB`. The domains receive the `sql` node's `data.Database`, the dialect-wrapped session
+and the pattern catalog their statements compile against. The items domain, the one package that
+keeps objects, receives the `storage` node's `storage.Store`, go-storage's standard tier. The
+integration harness and suite sit outside the service's process and reach the database and the
+gateway directly: the harness makes each test's database through sqlate's `postgres/pgtest` and
+reaches a bucket through go-storage's `s3`, and the suite names pgvector from `postgres/pgvector`
+and runs pgvector queries to prove the index. The package boundary is a convention held in
+review.
 
 sqlint holds each statement file to its tier. `mise run check` runs it under
 [`sqlint.toml`](../sqlint.toml), which fails a statement file in `domain/*/statements` or
 `data/statements` that is headed `tier: standard` and uses a native form PostgreSQL or pgvector
-declares. One statement file is native tier:
-[`data/statements/lock.sql`](../data/statements/lock.sql), the context tree's advisory lock,
-`pg_advisory_xact_lock` over `hashtext`. sqlint does not check the migrations' forms, so review
-holds the migrations list below.
+declares. Three statement files are native tier, each headed `tier: native` with the form it
+uses and its ports:
+
+- [`data/statements/lock.sql`](../data/statements/lock.sql), the context tree's advisory lock,
+  `pg_advisory_xact_lock` over `hashtext`.
+- [`domain/items/statements/claim_stale_blob.sql`](../domain/items/statements/claim_stale_blob.sql)
+  and [`claim_orphan_blob.sql`](../domain/items/statements/claim_orphan_blob.sql), the blob
+  reclaimers' claims, `SELECT ... FOR UPDATE SKIP LOCKED` ([Items](items.md#reclamation)).
+
+sqlint does not check the migrations' forms, so review holds the migrations list below.
 
 ## What a provider swap changes
 
@@ -60,9 +74,20 @@ migrations below, and leaves the configuration's shape and the other packages as
   with its GIN index. Another engine uses its own full-text index.
 - `0008_context`: `jsonb` for a query context's filter, checked with `jsonb_typeof` and
   `jsonb_array_length`, and `timestamptz` with its `now()` default for the creation time.
+- `0009_upload`: the `~` `CHECK` on the upload's SHA-256, `bytea` for its hash state, and
+  `timestamptz` for its expiry.
+- `0010_upload_chunk`: `bytea` for a chunk's content.
+- `0011_blob`: the `~` `CHECK` on the blob's SHA-256, and `timestamptz` with its `now()` default
+  for the creation and update times.
+- `0012_item`: the `~` `CHECK` on the item's SHA-256, and `timestamptz` with its `now()` default
+  for the creation time.
+- `0013_context_item`: `timestamptz` with its `now()` default for the creation time.
 
 A port also changes the native statement files:
 
 - `data/statements/lock.sql`: the advisory lock. Its header names the replacements:
   `sp_getapplock` (SQL Server), `GET_LOCK` (MySQL), `DBMS_LOCK` (Oracle), or a `FOR UPDATE`
   mutex row.
+- `domain/items/statements/claim_stale_blob.sql` and `claim_orphan_blob.sql`: the claim that
+  locks a row and skips one another transaction holds. Their headers name the replacements:
+  `UPDLOCK` with `READPAST` (SQL Server), or `FOR UPDATE SKIP LOCKED` (MySQL 8).

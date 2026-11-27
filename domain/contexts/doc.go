@@ -4,11 +4,12 @@
 // id, a paged read of a context's children by name, a rename, a move, and
 // a delete of a context's subtree.
 // The service also resolves a context to its subtree, each context with
-// its kind, for the domains that build on the tree.
+// its kind and filter, for the domains that build on the tree.
 //
 // A context is explicit or query, fixed at its creation. A query context
 // carries a filter, a non-empty list of conditions in the shape of
-// sqlate's query.Filter, and is a leaf: no context is placed under one.
+// sqlate's query.Filter, checked on create against the field contract the
+// service is built with, and is a leaf: no context is placed under one.
 // An explicit context carries no filter. Every change to the tree's shape
 // takes the tree lock ([data.LockContextTree]) first, in the transaction
 // that makes it, so a move's cycle check meets no concurrent move. A move
@@ -22,16 +23,17 @@
 //
 // The package's API:
 //
-//   - [Service], built by [New]: the layer's operations, one per endpoint,
-//     and the subtree resolution.
+//   - [Service], built by [New] over a field contract: the layer's
+//     operations, one per endpoint, and the subtree resolution.
 //   - [Routes]: the route group the composition root mounts.
 //   - [Context], [Kind] with [KindExplicit] and [KindQuery], and [Root]:
 //     the read shape, the kinds, and the root's id.
 //   - [CreateContext], [RenameContext], and [MoveContext]: the create,
 //     rename, and move commands' inputs, each validating itself.
-//   - [Node]: one context of a resolved subtree, its id and kind.
+//   - [Node]: one context of a resolved subtree, its id, kind, and filter.
 //   - [Filter] and [Condition]: a query context's filter, validating
-//     itself and mapping onto sqlate's filter declarations.
+//     itself, checking itself against a field contract, and mapping onto
+//     sqlate's filter declarations.
 //   - [ErrValidation]: a refused input, a 400.
 //   - [ErrParentNotFound]: a create or move under a missing parent, a 404.
 //   - [ErrNameTaken], [ErrQueryParent], [ErrRootFixed], and [ErrCycle]: a

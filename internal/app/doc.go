@@ -5,7 +5,7 @@
 //
 //   - infrastructure.go: defineInfrastructure, the lifecycle configuration
 //     and the services the application is composed on (the logger, the
-//     database pool, and the sql node over it);
+//     database pool, the object store, and the sql node over the pool);
 //   - admin.go: defineAdmin, the quiesce gate and the administrative
 //     services, and their /admin mount;
 //   - domain.go: defineDomain, the domain services, and their /api mount;
@@ -69,13 +69,21 @@
 // database, the PostgreSQL pool go-database's postgres provider constructs
 // from the configuration's database block; and the sql node, the pool's
 // session wrapped in sqlate's PostgreSQL dialect and grouped with the
-// pattern catalog as a data.Database. Each service is its own node, with
-// any order it needs declared on its Define line. The composition root is
-// the only package that imports the provider: the admin service receives
-// the pool as a go-database database.DB, and the domains receive the sql
-// node's data.Database. The pool's Start pings the database, so an
-// unreachable database fails startup with an error naming the database
-// node, and its Ready joins the readiness probe under that name. A service
+// pattern catalog as a data.Database; and the storage, go-storage's Store
+// over the client its s3 provider constructs from the configuration's
+// storage block. Each service is its own node, with any order it needs
+// declared on its Define line. The composition root is the only package
+// that imports a provider: the admin service receives the pool as a
+// go-database database.DB, the domains receive the sql node's
+// data.Database, and a package that keeps objects receives the storage
+// node's storage.Store, go-storage's standard tier. The pool's Start pings
+// the database, so an unreachable database fails startup with an error
+// naming the database node, and its Ready joins the readiness probe under
+// that name. The store's Start ensures the configured bucket exists and
+// probes it, so an unreachable gateway fails startup with an error naming
+// the storage node; its Ready probes the bucket live and joins the
+// readiness probe under the storage's name, so an outage after startup
+// makes the service not ready without ending it. A service
 // whose value implements lifecycle.Subsystem takes part in startup and
 // shutdown through its own methods, and its constructor opens nothing:
 // connectivity belongs to its Start, so a failed Build leaks no
@@ -121,8 +129,21 @@
 // handler handed, at the construction site, its service, its policy from
 // the config node (cfg.Reads.Limits() for a collection read), and the
 // logger for its error writer (web.NewErrorWriter(logger, ...)). Mikoshi's
-// one domain layer is contexts, the context tree, built over the sql node
-// and mounted at /api/contexts with the read limits allowing a cursor.
+// domain layers are contexts, the context tree, built over the sql node and
+// the items layer's FilterFields, the field contract its query filters are
+// checked against, and mounted at /api/contexts; uploads, the resumable
+// uploads in progress, built over the sql node; and items, built over the
+// sql node, the storage node, and the contexts node and mounted at
+// /api/items, each read with the read limits allowing a cursor. The items
+// layer's reference group mounts at /api/contexts beside the contexts
+// layer's group, its routes under /api/contexts/{id}/items, the covered
+// items' read with the same read limits. go-web-sdk's draft-16 upload
+// handler mounts at /api/uploads, on the client's origin and so with no
+// CORS, over the uploads service, with the lifetime and max-append-size of
+// the configuration's uploads block, the max-append-size as the limit of
+// the server block's Transfer, and the items layer's Completion as its
+// Complete, which answers with the item's Location under /api/items. The
+// items group's record create reads its body under that same Transfer.
 //
 // A reactor runs for the process lifetime, driven by an occurrence (a
 // subscription, an interval, a wake on demand) rather than a caller, the
@@ -140,7 +161,19 @@
 // context ends. The Coordinator infers from the value's methods that the
 // reactor starts with its layer, drains before the nodes it uses, joins
 // the readiness probe under its node's name, and ends the run on its
-// failure. The template defines none.
+// failure. Mikoshi's one reactor is the sweeper, go-database's
+// sweep.Sweeper, a reactor of the same shape over a reactor.Wake: it
+// orders itself after the schema, so it starts over the migrated schema,
+// holds the gate shared for each pass, and runs the domains' reclaimers,
+// each named for the advisory lock it claims and scheduled by its policy
+// from the configuration's sweep block: expired_uploads, the uploads
+// layer's Reclaimer, which deletes expired uploads and their chunks;
+// pending_blobs, the items layer's PendingReclaimer, which removes a blob
+// row left pending past the block's stale age, and its object; and
+// orphan_blobs, the items layer's OrphanReclaimer, which removes an
+// available blob no item has named past the block's stale age, its
+// object, and the content's source occurrences, sources, chunks, and
+// embeddings that nothing else names.
 //
 // The request edge's readiness is a fresh node, so each Build's starts
 // unbound, ready for the Coordinator that Build's System is handed to. The

@@ -7,24 +7,28 @@ import (
 	"github.com/standards-lab/go-core/lifecycle"
 	"github.com/standards-lab/go-core/logging"
 	"github.com/standards-lab/go-database"
+	"github.com/standards-lab/go-storage"
 	"github.com/standards-lab/go-web-sdk"
 )
 
 const envPrefix = "mikoshi"
 
 // Config is the service's root configuration: the library capability blocks
-// (the database among them) plus the service-owned read policy. It embeds
-// the lifecycle Coordinator's configuration by value and untagged, so its
-// shutdown_timeout is a top-level key and ShutdownTimeout a promoted field;
-// Config.Config is that lifecycle block, the one the composition root hands
-// the Coordinator.
+// (the database and the object store among them) plus the service-owned
+// read, upload, and sweep policies. It embeds the lifecycle Coordinator's
+// configuration by value and untagged, so its shutdown_timeout is a
+// top-level key and ShutdownTimeout a promoted field; Config.Config is that
+// lifecycle block, the one the composition root hands the Coordinator.
 type Config struct {
 	lifecycle.Config
 
 	Log      logging.Config  `json:"log"`
 	Server   web.Config      `json:"server"`
 	Database database.Config `json:"database"`
+	Storage  storage.Config  `json:"storage"`
 	Reads    ReadsConfig     `json:"reads"`
+	Uploads  UploadsConfig   `json:"uploads"`
+	Sweep    SweepConfig     `json:"sweep"`
 }
 
 // Merge overlays src's set fields onto the receiver, delegating each block
@@ -37,7 +41,10 @@ func (c *Config) Merge(src *Config) {
 	c.Log.Merge(&src.Log)
 	c.Server.Merge(&src.Server)
 	c.Database.Merge(&src.Database)
+	c.Storage.Merge(&src.Storage)
 	c.Reads.Merge(&src.Reads)
+	c.Uploads.Merge(&src.Uploads)
+	c.Sweep.Merge(&src.Sweep)
 }
 
 // Finalize finalizes each block under the same prefix, the lifecycle block
@@ -61,8 +68,17 @@ func (c *Config) Finalize(envPrefix string) error {
 	if err := c.Database.Finalize(envPrefix); err != nil {
 		return fmt.Errorf("database: %w", err)
 	}
+	if err := c.Storage.Finalize(envPrefix); err != nil {
+		return fmt.Errorf("storage: %w", err)
+	}
 	if err := c.Reads.Finalize(envPrefix); err != nil {
 		return fmt.Errorf("reads: %w", err)
+	}
+	if err := c.Uploads.Finalize(envPrefix); err != nil {
+		return fmt.Errorf("uploads: %w", err)
+	}
+	if err := c.Sweep.Finalize(envPrefix); err != nil {
+		return fmt.Errorf("sweep: %w", err)
 	}
 	return nil
 }

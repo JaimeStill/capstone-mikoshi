@@ -1,0 +1,22 @@
+# SeaweedFS's S3 gateway, built from compose/seaweedfs/Dockerfile: seaweedfs keeps its data in a
+# named volume, and seaweedfs-integration, under the integration profile, keeps it on tmpfs.
+# See architecture/standards/go-elemental/principles/release-and-ci.md
+services:
+  seaweedfs:
+    build:
+      context: seaweedfs
+    ports:
+      - "127.0.0.1:${SEAWEEDFS_PORT:-8336}:8333"
+    volumes:
+      - mikoshi-seaweedfs:/data
+
+  seaweedfs-integration:
+    profiles: [integration]
+    build:
+      context: seaweedfs
+    ports:
+      - "127.0.0.1:${SEAWEEDFS_PORT:-8337}:8333"
+    tmpfs: /data
+
+volumes:
+  mikoshi-seaweedfs:

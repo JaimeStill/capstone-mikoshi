@@ -16,6 +16,8 @@ import (
 	"github.com/standards-lab/go-core/graph/graphtest"
 	"github.com/standards-lab/go-core/lifecycle"
 	"github.com/standards-lab/go-core/reactor"
+	"github.com/standards-lab/go-storage"
+	"github.com/standards-lab/go-storage/storagetest"
 	"github.com/standards-lab/go-web-sdk"
 
 	"github.com/JaimeStill/capstone-mikoshi/internal/app"
@@ -36,8 +38,58 @@ func TestGraph_ReadinessChecks(t *testing.T) {
 	for _, c := range lifecycle.New(sys, cfg.Config).Checks() {
 		got = append(got, c.Name)
 	}
-	if want := []string{"database", "schema"}; !slices.Equal(got, want) {
+	if want := []string{"database", "storage", "schema", "sweeper"}; !slices.Equal(got, want) {
 		t.Errorf("checks = %v, want %v\nlayers:\n%s", got, want, sys)
+	}
+}
+
+func fakeStorage(t *testing.T, a *app.App) *storagetest.Fake {
+	t.Helper()
+	fake := storagetest.NewFake(storagetest.Options{NoContainer: true})
+	a.Graph().Replace(a.Nodes().Storage, func(s *graph.Scope) (*storage.Store, error) {
+		return storage.New(fake, s.Use(a.Nodes().Config).Storage), nil
+	})
+	return fake
+}
+
+func TestGraph_StorageReadinessFollowsTheStore(t *testing.T) {
+	cfg := configtest.Config(t)
+	a := app.New(cfg, io.Discard)
+	fake := fakeStorage(t, a)
+	sys := buildAsRun(t, a)
+
+	var check lifecycle.ReadinessChecker
+	for _, c := range lifecycle.New(sys, cfg.Config).Checks() {
+		if c.Name == a.Nodes().Storage.Name() {
+			check = c.Checker
+		}
+	}
+	if check == nil {
+		t.Fatalf("no %s readiness check\nlayers:\n%s", a.Nodes().Storage.Name(), sys)
+	}
+	if check.Ready() {
+		t.Error("storage ready before Start, want not ready")
+	}
+
+	store := sys.Get(a.Nodes().Storage)
+	if err := store.Start(t.Context()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Shutdown(context.Background()) })
+	if !fake.HasContainer() {
+		t.Error("Start did not ensure the container")
+	}
+	if !check.Ready() {
+		t.Error("storage not ready after Start")
+	}
+
+	fake.SetDown(true)
+	if check.Ready() {
+		t.Error("storage ready during an outage, want not ready")
+	}
+	fake.SetDown(false)
+	if !check.Ready() {
+		t.Error("storage not ready after the outage ended")
 	}
 }
 
@@ -73,6 +125,69 @@ func TestGraph_ServerReachesTheAdminMount(t *testing.T) {
 	if slices.Contains(a.Roots(), graph.Ref(n.Schema)) {
 		t.Errorf("roots = %v, want the schema reached through the server, not listed", a.Roots())
 	}
+}
+
+func TestGraph_ServerReachesTheStorageThroughItems(t *testing.T) {
+	a := app.New(configtest.Config(t), io.Discard)
+	n := a.Nodes()
+	sys, err := a.Graph().Build(n.Server)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	for _, r := range []graph.Ref{n.Items, n.Uploads, n.Storage} {
+		if !sys.Has(r) {
+			t.Errorf("the server's Build does not reach %s\nlayers:\n%s", r.Name(), sys)
+		}
+	}
+	if sys.LayerOf(n.Storage) >= sys.LayerOf(n.Items) {
+		t.Errorf("%s in layer %d, %s in layer %d; want the storage below the items\nlayers:\n%s",
+			n.Storage.Name(), sys.LayerOf(n.Storage), n.Items.Name(), sys.LayerOf(n.Items), sys)
+	}
+	if slices.Contains(a.Roots(), graph.Ref(n.Storage)) {
+		t.Errorf("roots = %v, want the storage reached through the items, not listed", a.Roots())
+	}
+}
+
+func TestGraph_SweeperIsAReactorAboveTheSchema(t *testing.T) {
+	a := app.New(configtest.Config(t), io.Discard)
+	n := a.Nodes()
+	members, err := a.Graph().Build(n.Reactors)
+	if err != nil {
+		t.Fatalf("Build of %s: %v", n.Reactors.Name(), err)
+	}
+	if !members.Has(n.Sweeper) {
+		t.Fatalf("%s is not a member of %s\nlayers:\n%s", n.Sweeper.Name(), n.Reactors.Name(), members)
+	}
+
+	sys := buildAsRun(t, a)
+	if sys.LayerOf(n.Schema) >= sys.LayerOf(n.Sweeper) {
+		t.Errorf("%s in layer %d, %s in layer %d; want the sweeper above the schema\nlayers:\n%s",
+			n.Schema.Name(), sys.LayerOf(n.Schema), n.Sweeper.Name(), sys.LayerOf(n.Sweeper), sys)
+	}
+	if err := serverAlone(sys, n.Server); err != nil {
+		t.Error(err)
+	}
+}
+
+func TestGraph_SweeperRegistersEachDomainsReclaimer(t *testing.T) {
+	a := app.New(configtest.Config(t), io.Discard)
+	sweeper := buildAsRun(t, a).Get(a.Nodes().Sweeper)
+	for _, name := range []string{"expired_uploads", "pending_blobs", "orphan_blobs"} {
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Errorf("Nudge(%q) panicked: %v; want the reclaimer registered", name, r)
+				}
+			}()
+			sweeper.Nudge(name)
+		}()
+	}
+	defer func() {
+		if recover() == nil {
+			t.Error("Nudge of an unregistered name did not panic; want only the domains' reclaimers registered")
+		}
+	}()
+	sweeper.Nudge("unregistered")
 }
 
 func runSet(a *app.App, extra ...graph.Ref) []graph.Ref {
@@ -293,7 +408,7 @@ func TestGraph_SchemaListsEveryRegisteredInventory(t *testing.T) {
 	for _, d := range sys.Get(a.Nodes().Schema).Statements().Domains {
 		got = append(got, d.Name)
 	}
-	if want := []string{"contexts", "data"}; !slices.Equal(got, want) {
+	if want := []string{"contexts", "data", "items", "uploads"}; !slices.Equal(got, want) {
 		t.Errorf("statements registry = %v, want %v", got, want)
 	}
 }

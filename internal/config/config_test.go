@@ -244,6 +244,91 @@ func TestReads_FinalizeRejectsInvalidPolicy(t *testing.T) {
 	}
 }
 
+func TestUploads_FinalizeDefaults(t *testing.T) {
+	cfg := configtest.Minimal()
+	if err := cfg.Finalize(""); err != nil {
+		t.Fatalf("Finalize: %v", err)
+	}
+
+	if got := cfg.Uploads.Lifetime.Duration(); got != 24*time.Hour {
+		t.Errorf("Uploads.Lifetime = %s, want 24h", got)
+	}
+	if got := *cfg.Uploads.MaxAppendSize; got != 4<<20 {
+		t.Errorf("Uploads.MaxAppendSize = %d, want 4 MiB", got)
+	}
+	if cfg.Uploads.Env != (config.UploadsEnv{}) {
+		t.Errorf("Uploads.Env = %+v, want empty under the empty prefix", cfg.Uploads.Env)
+	}
+}
+
+func TestUploads_MergeOverlaysSetFields(t *testing.T) {
+	base := &config.Config{}
+	base.Uploads.Lifetime = new(libconfig.Duration(time.Hour))
+	base.Uploads.MaxAppendSize = new(int64(1024))
+
+	overlay := &config.Config{}
+	overlay.Uploads.MaxAppendSize = new(int64(2048))
+
+	base.Merge(overlay)
+
+	if got := *base.Uploads.MaxAppendSize; got != 2048 {
+		t.Errorf("Uploads.MaxAppendSize = %d, want 2048", got)
+	}
+	if got := base.Uploads.Lifetime.Duration(); got != time.Hour {
+		t.Errorf("Uploads.Lifetime = %s, want 1h", got)
+	}
+}
+
+func TestUploads_FinalizeEnvOverrides(t *testing.T) {
+	t.Setenv("MIKOSHI_UPLOADS_LIFETIME", "90m")
+	t.Setenv("MIKOSHI_UPLOADS_MAX_APPEND_SIZE", "65536")
+
+	cfg := configtest.Minimal()
+	if err := cfg.Finalize("mikoshi"); err != nil {
+		t.Fatalf("Finalize: %v", err)
+	}
+
+	if got := cfg.Uploads.Lifetime.Duration(); got != 90*time.Minute {
+		t.Errorf("Uploads.Lifetime = %s, want 1h30m", got)
+	}
+	if got := *cfg.Uploads.MaxAppendSize; got != 65536 {
+		t.Errorf("Uploads.MaxAppendSize = %d, want 65536", got)
+	}
+	want := config.UploadsEnv{Lifetime: "MIKOSHI_UPLOADS_LIFETIME", MaxAppendSize: "MIKOSHI_UPLOADS_MAX_APPEND_SIZE"}
+	if cfg.Uploads.Env != want {
+		t.Errorf("Uploads.Env = %+v, want %+v", cfg.Uploads.Env, want)
+	}
+}
+
+func TestUploads_FinalizeRejectsInvalidPolicy(t *testing.T) {
+	cases := map[string]struct {
+		lifetime, maxAppendSize string
+		want                    string
+	}{
+		"lifetime zero":                {"0s", "1024", "lifetime"},
+		"lifetime negative":            {"-1h", "1024", "lifetime"},
+		"lifetime not a duration":      {"soon", "1024", "MIKOSHI_UPLOADS_LIFETIME"},
+		"max-append-size zero":         {"1h", "0", "max_append_size"},
+		"max-append-size past Integer": {"1h", "1000000000000000", "max_append_size"},
+		"max-append-size not a number": {"1h", "lots", "MIKOSHI_UPLOADS_MAX_APPEND_SIZE"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("MIKOSHI_UPLOADS_LIFETIME", tc.lifetime)
+			t.Setenv("MIKOSHI_UPLOADS_MAX_APPEND_SIZE", tc.maxAppendSize)
+
+			cfg := configtest.Minimal()
+			err := cfg.Finalize("mikoshi")
+			if err == nil {
+				t.Fatal("Finalize accepted an invalid uploads policy")
+			}
+			if !strings.Contains(err.Error(), "uploads:") || !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("error = %v, want the uploads block wrap naming %s", err, tc.want)
+			}
+		})
+	}
+}
+
 func TestDatabase_FinalizeDefaults(t *testing.T) {
 	cfg := configtest.Minimal()
 	if err := cfg.Finalize(""); err != nil {
@@ -329,5 +414,193 @@ func TestDatabase_FinalizeWrapsInvalidPort(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "database:") || !strings.Contains(err.Error(), "MIKOSHI_DATABASE_PORT") {
 		t.Errorf("error = %v, want the database block wrap naming MIKOSHI_DATABASE_PORT", err)
+	}
+}
+
+func TestStorage_FinalizeDefaults(t *testing.T) {
+	cfg := configtest.Minimal()
+	if err := cfg.Finalize(""); err != nil {
+		t.Fatalf("Finalize: %v", err)
+	}
+
+	if !cfg.Storage.Finalized() {
+		t.Error("Storage.Finalized() = false after Finalize")
+	}
+	if got := cfg.Storage.RequestTimeout.Duration(); got != 10*time.Second {
+		t.Errorf("Storage.RequestTimeout = %s, want the 10s default", got)
+	}
+	if cfg.Storage.Key != "" {
+		t.Errorf("Storage.Key = %q, want none without a secrets layer", cfg.Storage.Key)
+	}
+}
+
+func TestStorage_FinalizeEnvOverrides(t *testing.T) {
+	t.Setenv("MIKOSHI_STORAGE_ENDPOINT", "http://127.0.0.1:8337")
+	t.Setenv("MIKOSHI_STORAGE_CONTAINER", "mikoshi-test")
+	t.Setenv("MIKOSHI_STORAGE_ACCOUNT", "tester")
+	t.Setenv("MIKOSHI_STORAGE_KEY", "from-env")
+	t.Setenv("MIKOSHI_STORAGE_OPTIONS_REGION", "eu-west-1")
+
+	cfg := configtest.Minimal()
+	if err := cfg.Finalize("mikoshi"); err != nil {
+		t.Fatalf("Finalize: %v", err)
+	}
+
+	st := cfg.Storage
+	if st.Endpoint != "http://127.0.0.1:8337" || st.Container != "mikoshi-test" {
+		t.Errorf("Storage endpoint, container = %q, %q, want the MIKOSHI_STORAGE_* values", st.Endpoint, st.Container)
+	}
+	if st.Account != "tester" || st.Key != "from-env" {
+		t.Errorf("Storage account, key = %q, %q, want the MIKOSHI_STORAGE_* values", st.Account, st.Key)
+	}
+	if st.Options["region"] != "eu-west-1" {
+		t.Errorf("Storage.Options[region] = %q, want MIKOSHI_STORAGE_OPTIONS_REGION's", st.Options["region"])
+	}
+}
+
+func TestStorage_FinalizeRequiresContainer(t *testing.T) {
+	cfg := configtest.Minimal()
+	cfg.Storage.Container = ""
+	err := cfg.Finalize("")
+	if err == nil {
+		t.Fatal("Finalize accepted a config with no storage container")
+	}
+	if !strings.Contains(err.Error(), "storage:") || !strings.Contains(err.Error(), "container") {
+		t.Errorf("error = %v, want the storage block wrap naming the container", err)
+	}
+}
+
+func TestSweep_FinalizeDefaults(t *testing.T) {
+	cfg := configtest.Minimal()
+	if err := cfg.Finalize(""); err != nil {
+		t.Fatalf("Finalize: %v", err)
+	}
+
+	s := cfg.Sweep
+	if got := s.ExpiredUploads.Interval.Duration(); got != time.Minute || *s.ExpiredUploads.Budget != 100 {
+		t.Errorf("ExpiredUploads = {%s %d}, want {1m 100}", got, *s.ExpiredUploads.Budget)
+	}
+	if got := s.PendingBlobs.Interval.Duration(); got != 5*time.Minute || *s.PendingBlobs.Budget != 100 {
+		t.Errorf("PendingBlobs = {%s %d}, want {5m 100}", got, *s.PendingBlobs.Budget)
+	}
+	if got := s.PendingBlobs.StaleAge.Duration(); got != time.Hour {
+		t.Errorf("PendingBlobs.StaleAge = %s, want 1h", got)
+	}
+	if got := s.OrphanBlobs.Interval.Duration(); got != 15*time.Minute || *s.OrphanBlobs.Budget != 100 {
+		t.Errorf("OrphanBlobs = {%s %d}, want {15m 100}", got, *s.OrphanBlobs.Budget)
+	}
+	if got := s.OrphanBlobs.StaleAge.Duration(); got != 24*time.Hour {
+		t.Errorf("OrphanBlobs.StaleAge = %s, want 24h", got)
+	}
+	if s.Env != (config.SweepEnv{}) {
+		t.Errorf("Sweep.Env = %+v, want empty under the empty prefix", s.Env)
+	}
+}
+
+func TestSweep_MergeOverlaysSetFields(t *testing.T) {
+	base := &config.Config{}
+	base.Sweep.ExpiredUploads.Interval = new(libconfig.Duration(time.Hour))
+	base.Sweep.ExpiredUploads.Budget = new(10)
+	base.Sweep.PendingBlobs.StaleAge = new(libconfig.Duration(time.Hour))
+
+	overlay := &config.Config{}
+	overlay.Sweep.ExpiredUploads.Budget = new(20)
+	overlay.Sweep.PendingBlobs.Interval = new(libconfig.Duration(time.Minute))
+	overlay.Sweep.PendingBlobs.StaleAge = new(libconfig.Duration(2 * time.Hour))
+	overlay.Sweep.OrphanBlobs.Budget = new(30)
+	overlay.Sweep.OrphanBlobs.StaleAge = new(libconfig.Duration(48 * time.Hour))
+
+	base.Merge(overlay)
+
+	s := base.Sweep
+	if got := s.ExpiredUploads.Interval.Duration(); got != time.Hour || *s.ExpiredUploads.Budget != 20 {
+		t.Errorf("ExpiredUploads = {%s %d}, want {1h 20}", got, *s.ExpiredUploads.Budget)
+	}
+	if got := s.PendingBlobs.Interval.Duration(); got != time.Minute || s.PendingBlobs.Budget != nil {
+		t.Errorf("PendingBlobs = {%s %v}, want {1m unset}", got, s.PendingBlobs.Budget)
+	}
+	if got := s.PendingBlobs.StaleAge.Duration(); got != 2*time.Hour {
+		t.Errorf("PendingBlobs.StaleAge = %s, want 2h", got)
+	}
+	if s.OrphanBlobs.Interval != nil || *s.OrphanBlobs.Budget != 30 || s.OrphanBlobs.StaleAge.Duration() != 48*time.Hour {
+		t.Errorf("OrphanBlobs = {%v %d %s}, want {unset 30 48h}", s.OrphanBlobs.Interval, *s.OrphanBlobs.Budget, s.OrphanBlobs.StaleAge)
+	}
+}
+
+func TestSweep_FinalizeEnvOverrides(t *testing.T) {
+	t.Setenv("MIKOSHI_SWEEP_EXPIRED_UPLOADS_INTERVAL", "30s")
+	t.Setenv("MIKOSHI_SWEEP_EXPIRED_UPLOADS_BUDGET", "50")
+	t.Setenv("MIKOSHI_SWEEP_PENDING_BLOBS_INTERVAL", "10m")
+	t.Setenv("MIKOSHI_SWEEP_PENDING_BLOBS_BUDGET", "7")
+	t.Setenv("MIKOSHI_SWEEP_PENDING_BLOBS_STALE_AGE", "90m")
+	t.Setenv("MIKOSHI_SWEEP_ORPHAN_BLOBS_INTERVAL", "2h")
+	t.Setenv("MIKOSHI_SWEEP_ORPHAN_BLOBS_BUDGET", "9")
+	t.Setenv("MIKOSHI_SWEEP_ORPHAN_BLOBS_STALE_AGE", "72h")
+
+	cfg := configtest.Minimal()
+	if err := cfg.Finalize("mikoshi"); err != nil {
+		t.Fatalf("Finalize: %v", err)
+	}
+
+	s := cfg.Sweep
+	if got := s.ExpiredUploads.Interval.Duration(); got != 30*time.Second || *s.ExpiredUploads.Budget != 50 {
+		t.Errorf("ExpiredUploads = {%s %d}, want {30s 50}", got, *s.ExpiredUploads.Budget)
+	}
+	if got := s.PendingBlobs.Interval.Duration(); got != 10*time.Minute || *s.PendingBlobs.Budget != 7 {
+		t.Errorf("PendingBlobs = {%s %d}, want {10m 7}", got, *s.PendingBlobs.Budget)
+	}
+	if got := s.PendingBlobs.StaleAge.Duration(); got != 90*time.Minute {
+		t.Errorf("PendingBlobs.StaleAge = %s, want 1h30m", got)
+	}
+	if got := s.OrphanBlobs.Interval.Duration(); got != 2*time.Hour || *s.OrphanBlobs.Budget != 9 {
+		t.Errorf("OrphanBlobs = {%s %d}, want {2h 9}", got, *s.OrphanBlobs.Budget)
+	}
+	if got := s.OrphanBlobs.StaleAge.Duration(); got != 72*time.Hour {
+		t.Errorf("OrphanBlobs.StaleAge = %s, want 72h", got)
+	}
+	want := config.SweepEnv{
+		ExpiredUploadsInterval: "MIKOSHI_SWEEP_EXPIRED_UPLOADS_INTERVAL",
+		ExpiredUploadsBudget:   "MIKOSHI_SWEEP_EXPIRED_UPLOADS_BUDGET",
+		PendingBlobsInterval:   "MIKOSHI_SWEEP_PENDING_BLOBS_INTERVAL",
+		PendingBlobsBudget:     "MIKOSHI_SWEEP_PENDING_BLOBS_BUDGET",
+		PendingBlobsStaleAge:   "MIKOSHI_SWEEP_PENDING_BLOBS_STALE_AGE",
+		OrphanBlobsInterval:    "MIKOSHI_SWEEP_ORPHAN_BLOBS_INTERVAL",
+		OrphanBlobsBudget:      "MIKOSHI_SWEEP_ORPHAN_BLOBS_BUDGET",
+		OrphanBlobsStaleAge:    "MIKOSHI_SWEEP_ORPHAN_BLOBS_STALE_AGE",
+	}
+	if s.Env != want {
+		t.Errorf("Sweep.Env = %+v, want %+v", s.Env, want)
+	}
+}
+
+func TestSweep_FinalizeRejectsInvalidPolicy(t *testing.T) {
+	cases := map[string]struct {
+		variable, value string
+		want            string
+	}{
+		"expired uploads interval zero":          {"MIKOSHI_SWEEP_EXPIRED_UPLOADS_INTERVAL", "0s", "expired_uploads.interval"},
+		"expired uploads budget zero":            {"MIKOSHI_SWEEP_EXPIRED_UPLOADS_BUDGET", "0", "expired_uploads.budget"},
+		"expired uploads budget not a number":    {"MIKOSHI_SWEEP_EXPIRED_UPLOADS_BUDGET", "lots", "MIKOSHI_SWEEP_EXPIRED_UPLOADS_BUDGET"},
+		"pending blobs interval negative":        {"MIKOSHI_SWEEP_PENDING_BLOBS_INTERVAL", "-1m", "pending_blobs.interval"},
+		"pending blobs budget negative":          {"MIKOSHI_SWEEP_PENDING_BLOBS_BUDGET", "-3", "pending_blobs.budget"},
+		"pending blobs stale age zero":           {"MIKOSHI_SWEEP_PENDING_BLOBS_STALE_AGE", "0s", "pending_blobs.stale_age"},
+		"pending blobs stale age not a duration": {"MIKOSHI_SWEEP_PENDING_BLOBS_STALE_AGE", "soon", "MIKOSHI_SWEEP_PENDING_BLOBS_STALE_AGE"},
+		"orphan blobs interval zero":             {"MIKOSHI_SWEEP_ORPHAN_BLOBS_INTERVAL", "0s", "orphan_blobs.interval"},
+		"orphan blobs budget zero":               {"MIKOSHI_SWEEP_ORPHAN_BLOBS_BUDGET", "0", "orphan_blobs.budget"},
+		"orphan blobs stale age negative":        {"MIKOSHI_SWEEP_ORPHAN_BLOBS_STALE_AGE", "-1h", "orphan_blobs.stale_age"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv(tc.variable, tc.value)
+
+			cfg := configtest.Minimal()
+			err := cfg.Finalize("mikoshi")
+			if err == nil {
+				t.Fatal("Finalize accepted an invalid sweep policy")
+			}
+			if !strings.Contains(err.Error(), "sweep:") || !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("error = %v, want the sweep block wrap naming %s", err, tc.want)
+			}
+		})
 	}
 }

@@ -14,6 +14,7 @@ jq = "1.8.2"
 MIKOSHI_ENV = "local"
 GO_MODULES = "."
 MIKOSHI_INTEGRATION_DSN = "postgres://app:app@127.0.0.1:{{ get_env(name='POSTGRES_PORT', default='5441') }}/app?sslmode=disable"
+MIKOSHI_INTEGRATION_STORAGE = "http://127.0.0.1:{{ get_env(name='SEAWEEDFS_PORT', default='8337') }}"
 
 [tasks.check]
 depends = ["client:build", "client:check"]
@@ -79,12 +80,12 @@ run = "go test -race ./..."
 
 [tasks.integration]
 depends = ["client:build"]
-description = "Start the isolated integration stack (PostgreSQL on tmpfs, on POSTGRES_PORT, default 5441), run the integration tier against the built service as a subprocess, each test on its own throwaway database on the server MIKOSHI_INTEGRATION_DSN names, print the stack's logs on a failure, and tear the stack down"
+description = "Start the isolated integration stack (PostgreSQL on tmpfs, on POSTGRES_PORT, default 5441, and the SeaweedFS S3 gateway on tmpfs, on SEAWEEDFS_PORT, default 8337), run the integration tier against the built service as a subprocess, each test on its own throwaway database on the server MIKOSHI_INTEGRATION_DSN names and against the gateway MIKOSHI_INTEGRATION_STORAGE names, print the stack's logs on a failure, and tear the stack down"
 run = '''
 set -e
 export COMPOSE_PROJECT_NAME=mikoshi-integration COMPOSE_PROFILES=integration
 trap 'rc=$?; [ $rc -eq 0 ] || docker compose logs; docker compose down; exit $rc' EXIT
-docker compose up -d --wait --build postgres-integration
+docker compose up -d --wait --build postgres-integration seaweedfs-integration
 go test -race -count=1 -tags integration ./integration/
 '''
 
@@ -101,15 +102,15 @@ description = "Run golangci-lint, the integration suite included, then sqlint ov
 run = "golangci-lint run --build-tags integration ./... && go tool sqlint"
 
 [tasks."db:up"]
-description = "Build and start the development PostgreSQL (on POSTGRES_PORT, default 5440) and wait until it is healthy"
+description = "Build and start the development PostgreSQL (on POSTGRES_PORT, default 5440) and SeaweedFS S3 gateway (on SEAWEEDFS_PORT, default 8336) and wait until both are healthy"
 run = "docker compose up -d --wait --build"
 
 [tasks."db:down"]
-description = "Stop the development PostgreSQL, keeping its volume"
+description = "Stop the development PostgreSQL and SeaweedFS, keeping their volumes"
 run = "docker compose down"
 
 [tasks."db:reset"]
-description = "Stop the development PostgreSQL and drop its volume"
+description = "Stop the development PostgreSQL and SeaweedFS and drop their volumes"
 run = "docker compose down -v"
 
 [tasks."client:build"]

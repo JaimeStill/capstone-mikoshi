@@ -38,6 +38,7 @@ func (b *syncBuffer) String() string {
 func TestRun_FailsStartupWithoutDatabase(t *testing.T) {
 	buf, stderr := &syncBuffer{}, &syncBuffer{}
 	a := app.New(configtest.Config(t), buf)
+	fakeStorage(t, a)
 
 	done := make(chan int, 1)
 	go func() { done <- a.Run(context.Background(), stderr) }()

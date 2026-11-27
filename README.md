@@ -141,7 +141,10 @@ Configuration layers in a fixed precedence, later sources winning:
    - `MIKOSHI_DATABASE_HOST`, `MIKOSHI_DATABASE_PORT`, `MIKOSHI_DATABASE_NAME`,
      `MIKOSHI_DATABASE_USER`, `MIKOSHI_DATABASE_PASSWORD`, and the pool's variables
      ([Database](#database))
+   - go-storage's `MIKOSHI_STORAGE_*` variables
    - `MIKOSHI_READS_DEFAULT_SIZE`, `MIKOSHI_READS_MAX_SIZE`
+   - `MIKOSHI_UPLOADS_LIFETIME`, `MIKOSHI_UPLOADS_MAX_APPEND_SIZE`
+   - `MIKOSHI_SWEEP_<RECLAIMER>_<FIELD>` ([Items](docs/items.md#reclamation))
    - `MIKOSHI_SHUTDOWN_TIMEOUT`
 
 Every file is optional — a deployment can run on the base file and environment variables alone,
@@ -164,3 +167,4 @@ their nodes, and walks through adding a domain service, an infrastructure servic
 service, a reactor, middleware, and configuration.
 [Contexts](docs/contexts.md) covers the first domain service, the context tree under
 `/api/contexts`: its model, its filters, its routes, and its tree lock.
+[Items](docs/items.md) covers uploads, records, blobs, references, and reclamation.

@@ -7,7 +7,8 @@
 //
 //   - [Database], built by [New]: the session and the catalog the domains
 //     compile their statements against; [Database.Lock] takes an advisory
-//     lock named in the lock registry ([LockContextTree]).
+//     lock named in the lock registry ([LockContextTree]), which also
+//     reserves the prefix of the sweeper's own claims ([LockSweepPrefix]).
 //   - The statements registry on [Database]: each domain's store calls
 //     [Database.Register] at wiring with its compiled inventory and itself
 //     as the verifier, and [Database.Record] adds a verifier with no
@@ -16,7 +17,9 @@
 //     node runs it at startup, once the schema is current, and
 //     [Database.Registry] is the admin service's statements inventory.
 //   - [Migrations] and [AppSet]: Mikoshi's migration set, the chunks
-//     contract's records and the context tree under migrations/. The
+//     contract's records, the context tree, the resumable uploads in
+//     progress, and the items and the content-keyed blobs they name, under
+//     migrations/. The
 //     migrations use pgvector's vector type and HNSW index method; the
 //     composition root declares the extension to the migrator.
 package data

@@ -48,19 +48,25 @@ the items its parent covers. A filter is set when its context is created and is 
 move or a rename leaves it as it is. The table stores it as `jsonb`, and its constraints hold it
 to a non-empty array on a query context and absent on an explicit one.
 
-The contexts domain checks a filter's shape and operators, and refuses a malformed one with a 400
-that names the failing condition's index. It does not check the field names: the planned items
-domain will check them against its item projection and evaluate the filters.
+The contexts domain checks a filter's shape and operators, then checks it against the field
+contract of the item read, which the composition root passes it from the items domain. The
+contract refuses a field other than `route`, `kind`, or `duration`, a value whose JSON type is not
+its field's (a string for `route` and `kind`, a number for `duration`), and `like` on `duration`.
+A filter that fails either check is refused with a 400 that names the failing condition's index.
+The items domain evaluates the filters.
 
-## Membership and retrieval
+## References and retrieval
 
-Membership is planned in the items domain, and a context's memberships will be deleted with the
-context.
+The items domain owns the references that place items in explicit contexts. It places an item
+with `PUT /api/contexts/{id}/items/{item}`, withdraws it with `DELETE` on the same path, and pages
+the items a context covers with `GET /api/contexts/{id}/items` ([Items](items.md)). The
+references' table, `context_item`, cascades from `context`, so deleting a context's subtree
+deletes its references.
 
-Retrieval narrows chunks through the tree. A context resolves to an item-id set: the explicit
-members of every explicit context in its subtree, plus each query context's matches over all
-items. `Service.Subtree` gives the ids and kinds this starts from, the context included, by a
-recursive walk down the parent references. The planned chunk statements of `hybrid-search` and
+Retrieval narrows chunks through the tree. A context resolves to an item-id set: the items
+referenced in every explicit context of its subtree, plus each query context's matches over all
+items. `Service.Subtree` gives the ids, kinds, and filters this starts from, the context included,
+by a recursive walk down the parent references. The planned chunk statements of `hybrid-search` and
 `context-tools` will take that set and join item → input SHA-256 → source occurrence → source →
 chunk. Chunks and embeddings stay keyed by content and carry no context, as the chunks contract
 keeps them, so a change to a context never rewrites a chunk or an embedding.
@@ -81,6 +87,9 @@ The routes mount under `/api`. A context reads as its `id`, `parent_id` (null at
 
 The children read takes `page` and `size`, or the `cursor` the previous page returned, and
 refuses `sort` and `filter`. A query context's children are an empty page.
+
+The items domain mounts its routes under the same prefix: `GET /api/contexts/{id}/items`, and
+`PUT` and `DELETE` on `/api/contexts/{id}/items/{item}` ([Items](items.md#the-http-api)).
 
 Every refusal is a problem response:
 
@@ -114,7 +123,7 @@ ancestor walk, the descendant count. The lock keeps any concurrent change from l
 the read and the write, so two opposing moves (A under B, B under A) cannot both commit. The lock is `pg_advisory_xact_lock` over the
 name `context.tree`, from the lock registry in [`data/locks.go`](../data/locks.go), released
 when the transaction ends. Its statement, [`data/statements/lock.sql`](../data/statements/lock.sql),
-is Mikoshi's one native-tier statement.
+is native tier ([Stack](stack.md#standard-and-native-tiers)).
 
 A rename takes no lock. Its one statement changes no context's parent, so it cannot make a cycle
 or orphan a subtree, and the sibling-name constraint refuses a duplicate name against every

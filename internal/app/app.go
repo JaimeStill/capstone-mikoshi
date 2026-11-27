@@ -11,10 +11,14 @@ import (
 	"github.com/standards-lab/go-core/lifecycle"
 	"github.com/standards-lab/go-core/reactor"
 	"github.com/standards-lab/go-database"
+	"github.com/standards-lab/go-database/sweep"
+	"github.com/standards-lab/go-storage"
 	"github.com/standards-lab/go-web-sdk"
 
 	"github.com/JaimeStill/capstone-mikoshi/data"
 	"github.com/JaimeStill/capstone-mikoshi/domain/contexts"
+	"github.com/JaimeStill/capstone-mikoshi/domain/items"
+	"github.com/JaimeStill/capstone-mikoshi/domain/uploads"
 	"github.com/JaimeStill/capstone-mikoshi/internal/config"
 )
 
@@ -40,12 +44,14 @@ type Nodes struct {
 	Writer *graph.Node[io.Writer]
 
 	// Infrastructure (infrastructure.go): the database is the PostgreSQL
-	// pool, opened through go-database's provider; the sql node is the
-	// pool's session grouped with the pattern catalog, the database as the
-	// admin service and the domains see it.
+	// pool, opened through go-database's provider; the storage is the
+	// object store, go-storage's Store over its s3 provider; the sql node
+	// is the pool's session grouped with the pattern catalog, the database
+	// as the admin service and the domains see it.
 	LifecycleConfig *graph.Node[lifecycle.Config]
 	Logger          *graph.Node[*slog.Logger]
 	Database        *graph.Node[*database.DB]
+	Storage         *graph.Node[*storage.Store]
 	SQL             *graph.Node[*data.Database]
 
 	// Admin (admin.go): the gate is the process's quiesce gate, which the
@@ -56,13 +62,20 @@ type Nodes struct {
 	Gate   *graph.Node[*reactor.Gate]
 	Schema *graph.Node[*Schema]
 
-	// Domain (domain.go): the contexts service, the context tree.
+	// Domain (domain.go): the contexts service, the context tree; the
+	// uploads service, the resumable uploads in progress; and the items
+	// service, the items and the blobs they name.
 	Contexts *graph.Node[*contexts.Service]
+	Uploads  *graph.Node[*uploads.Service]
+	Items    *graph.Node[*items.Service]
 
 	// Reactors (reactors.go): the group each reactor joins with graph.In.
 	// A reactor is reached by no Use, so the group is one of [App.Roots],
 	// and the server orders itself after it so it stays the top layer.
+	// The sweeper is go-database's sweeper, which runs the domains'
+	// reclaimers, each on its policy from the configuration's sweep block.
 	Reactors *graph.Group
+	Sweeper  *graph.Node[*sweep.Sweeper]
 
 	// The request edge (server.go).
 	Readiness *graph.Node[*lifecycle.Readiness]
@@ -107,8 +120,8 @@ func (a *App) Nodes() Nodes { return a.nodes }
 // service starts from: the server, which reaches the router, the
 // readiness, the domain services, the admin mount's schema and gate, the
 // sql node, the database, the logger, the writer node, and the config
-// node through its Uses and theirs; and the reactors group, whose members
-// no Use reaches.
+// node through its Uses and theirs, the storage among them through the
+// items service; and the reactors group, whose members no Use reaches.
 // [App.Run] builds this set plus the lifecycle config node the Coordinator
 // is configured from.
 func (a *App) Roots() []graph.Ref {

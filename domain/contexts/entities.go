@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 	"uuid"
 
@@ -114,11 +115,13 @@ func (m MoveContext) Validate() error {
 	return errors.Join(errs...)
 }
 
-// Node is one context of a subtree as its resolution presents it: its id
-// and kind. The json tags are the scan contract.
+// Node is one context of a subtree as its resolution presents it: its id,
+// kind, and filter, nil for an explicit context. The json tags are the
+// scan contract.
 type Node struct {
-	ID   string `json:"id"`
-	Kind Kind   `json:"kind"`
+	ID     string `json:"id"`
+	Kind   Kind   `json:"kind"`
+	Filter Filter `json:"filter"`
 }
 
 // Filter is a query context's filter: its conditions, every one of which
@@ -138,8 +141,8 @@ type Condition struct {
 
 // Validate rejects an empty filter and every malformed condition, each
 // refusal naming the condition's index: an empty field, an unknown
-// operator, and a value the operator does not take. The field's name is
-// not checked against any contract here.
+// operator, and a value the operator does not take. [Filter.Check] checks
+// the fields against a field contract.
 func (f Filter) Validate() error {
 	if len(f) == 0 {
 		return fmt.Errorf("%w: filter must hold at least one condition", ErrValidation)
@@ -180,6 +183,85 @@ func (c Condition) validate() error {
 		return fmt.Errorf("op %q is not one of eq, ne, gt, ge, lt, le, like, in, null, notnull", c.Op)
 	}
 	return nil
+}
+
+// Check rejects every condition of a well-formed filter that does not fit
+// fields, a field contract, each refusal naming the condition's index: a
+// field the contract does not declare, a sqlate UnknownFieldError; a value
+// whose JSON type is not its field's, a number for a numeric field, a
+// boolean for a boolean one, and a string for any other; and like on a
+// field that is not text, each a sqlate InvalidValueError. Check takes a
+// filter Validate accepted.
+func (f Filter) Check(fields []query.Field) error {
+	declared := make(map[string]query.Field, len(fields))
+	for _, field := range fields {
+		declared[field.Name] = field
+	}
+	var errs []error
+	for i, c := range f {
+		if err := c.check(declared); err != nil {
+			errs = append(errs, fmt.Errorf("%w: filter[%d]: %w", ErrValidation, i, err))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+func (c Condition) check(declared map[string]query.Field) error {
+	field, ok := declared[c.Field]
+	if !ok {
+		return &query.UnknownFieldError{Field: c.Field, Use: query.FieldUseFilter}
+	}
+	want, text := fieldType(field.Type)
+	if c.Op == query.OpLike && !text {
+		return &query.InvalidValueError{Field: c.Field, Err: fmt.Errorf("op %q applies to a text field, not a %s field", c.Op, field.Type)}
+	}
+	var values []json.RawMessage
+	switch c.Op {
+	case query.OpIsNull, query.OpIsNotNull:
+	case query.OpIn:
+		if err := json.Unmarshal(c.Value, &values); err != nil {
+			return err
+		}
+	default:
+		values = []json.RawMessage{c.Value}
+	}
+	for _, v := range values {
+		if valueType(v) != want {
+			return &query.InvalidValueError{Field: c.Field, Err: fmt.Errorf("a %s field takes a %s, not %s", field.Type, want, v)}
+		}
+	}
+	return nil
+}
+
+type jsonType string
+
+const (
+	jsonString  jsonType = "string"
+	jsonNumber  jsonType = "number"
+	jsonBoolean jsonType = "boolean"
+)
+
+func fieldType(sqlType string) (jsonType, bool) {
+	base, _, _ := strings.Cut(strings.ToLower(sqlType), "(")
+	switch strings.TrimSpace(base) {
+	case "text", "character varying", "varchar", "character", "char":
+		return jsonString, true
+	case "smallint", "integer", "int", "bigint", "real", "double precision", "float", "numeric", "decimal":
+		return jsonNumber, false
+	case "boolean":
+		return jsonBoolean, false
+	}
+	return jsonString, false
+}
+
+func valueType(v json.RawMessage) jsonType {
+	switch bytes.TrimSpace(v)[0] {
+	case '"':
+		return jsonString
+	case 't', 'f':
+		return jsonBoolean
+	}
+	return jsonNumber
 }
 
 func scalar(v json.RawMessage) bool {

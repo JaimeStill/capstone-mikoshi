@@ -58,7 +58,7 @@ func TestAdmin_StatementsListEveryRegisteredDomain(t *testing.T) {
 	for _, d := range inv.Domains {
 		got[d.Name] = len(d.Statements)
 	}
-	if got["contexts"] == 0 || got["data"] == 0 || len(got) != 2 {
-		t.Errorf("statements by domain = %v, want contexts' and data's inventories", got)
+	if got["contexts"] == 0 || got["data"] == 0 || got["items"] == 0 || got["uploads"] == 0 || len(got) != 4 {
+		t.Errorf("statements by domain = %v, want contexts', data's, items', and uploads' inventories", got)
 	}
 }

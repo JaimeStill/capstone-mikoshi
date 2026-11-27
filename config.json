@@ -19,9 +19,35 @@
       "sslmode": "disable"
     }
   },
+  "storage": {
+    "container": "mikoshi",
+    "options": {
+      "region": "us-east-1"
+    }
+  },
   "reads": {
     "default_size": 20,
     "max_size": 100
+  },
+  "uploads": {
+    "lifetime": "24h",
+    "max_append_size": 4194304
+  },
+  "sweep": {
+    "expired_uploads": {
+      "interval": "1m",
+      "budget": 100
+    },
+    "pending_blobs": {
+      "interval": "5m",
+      "budget": 100,
+      "stale_age": "1h"
+    },
+    "orphan_blobs": {
+      "interval": "15m",
+      "budget": 100,
+      "stale_age": "24h"
+    }
   },
   "shutdown_timeout": "10s"
 }

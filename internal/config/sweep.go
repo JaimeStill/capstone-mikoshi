@@ -1,0 +1,162 @@
+package config
+
+import (
+	"fmt"
+	"strconv"
+	"time"
+
+	libconfig "github.com/standards-lab/go-core/config"
+)
+
+const (
+	defaultExpiredUploadsInterval = time.Minute
+	defaultExpiredUploadsBudget   = 100
+	defaultPendingBlobsInterval   = 5 * time.Minute
+	defaultPendingBlobsBudget     = 100
+	defaultPendingBlobsStaleAge   = time.Hour
+	defaultOrphanBlobsInterval    = 15 * time.Minute
+	defaultOrphanBlobsBudget      = 100
+	defaultOrphanBlobsStaleAge    = 24 * time.Hour
+)
+
+// SweepConfig is the service-owned sweep policy: the schedule of each
+// reclaimer go-database's sweeper runs. ExpiredUploads is the expired
+// uploads' reclaimer's; PendingBlobs the pending blobs' reclaimer's, with
+// the age past which a pending blob row is stale; and OrphanBlobs the
+// orphaned blobs' reclaimer's, with the age past which content no item
+// names is stale.
+type SweepConfig struct {
+	ExpiredUploads SweepPolicy `json:"expired_uploads"`
+	PendingBlobs   StalePolicy `json:"pending_blobs"`
+	OrphanBlobs    StalePolicy `json:"orphan_blobs"`
+	// Env records the environment-variable names Finalize composed and read.
+	Env SweepEnv `json:"-"`
+}
+
+// SweepPolicy is one reclaimer's schedule: the least time between the
+// starts of two of its cycles, and the most units one of its passes
+// reclaims. Pointer fields distinguish unset from zero.
+type SweepPolicy struct {
+	Interval *libconfig.Duration `json:"interval"`
+	Budget   *int                `json:"budget"`
+}
+
+// StalePolicy is the schedule of a reclaimer that removes a blob row once
+// it is stale, and the age, since the row last moved, past which the
+// reclaimer removes it and what it keeps.
+type StalePolicy struct {
+	SweepPolicy
+	StaleAge *libconfig.Duration `json:"stale_age"`
+}
+
+// SweepEnv holds the environment-variable names of the sweep block.
+type SweepEnv struct {
+	ExpiredUploadsInterval string
+	ExpiredUploadsBudget   string
+	PendingBlobsInterval   string
+	PendingBlobsBudget     string
+	PendingBlobsStaleAge   string
+	OrphanBlobsInterval    string
+	OrphanBlobsBudget      string
+	OrphanBlobsStaleAge    string
+}
+
+// Merge overlays src's set fields onto the receiver.
+func (c *SweepConfig) Merge(src *SweepConfig) {
+	if src == nil {
+		return
+	}
+	c.ExpiredUploads.merge(&src.ExpiredUploads)
+	c.PendingBlobs.merge(&src.PendingBlobs)
+	c.OrphanBlobs.merge(&src.OrphanBlobs)
+}
+
+func (p *StalePolicy) merge(src *StalePolicy) {
+	p.SweepPolicy.merge(&src.SweepPolicy)
+	if src.StaleAge != nil {
+		v := *src.StaleAge
+		p.StaleAge = &v
+	}
+}
+
+func (p *SweepPolicy) merge(src *SweepPolicy) {
+	if src.Interval != nil {
+		v := *src.Interval
+		p.Interval = &v
+	}
+	if src.Budget != nil {
+		v := *src.Budget
+		p.Budget = &v
+	}
+}
+
+// Finalize applies the defaults, the expired uploads' reclaimer every
+// minute, the pending blobs' every five minutes, and the orphaned blobs'
+// every fifteen minutes, each pass reclaiming at most 100, a pending blob
+// row stale after an hour, and content no item names stale after a day;
+// reads the block's environment overrides; and validates: every interval
+// and the stale age positive and every budget at least 1, the bounds the
+// sweeper refuses otherwise. An empty prefix composes empty names, which
+// disable the overrides.
+func (c *SweepConfig) Finalize(envPrefix string) error {
+	c.Env = SweepEnv{
+		ExpiredUploadsInterval: libconfig.EnvName(envPrefix, "sweep_expired_uploads_interval"),
+		ExpiredUploadsBudget:   libconfig.EnvName(envPrefix, "sweep_expired_uploads_budget"),
+		PendingBlobsInterval:   libconfig.EnvName(envPrefix, "sweep_pending_blobs_interval"),
+		PendingBlobsBudget:     libconfig.EnvName(envPrefix, "sweep_pending_blobs_budget"),
+		PendingBlobsStaleAge:   libconfig.EnvName(envPrefix, "sweep_pending_blobs_stale_age"),
+		OrphanBlobsInterval:    libconfig.EnvName(envPrefix, "sweep_orphan_blobs_interval"),
+		OrphanBlobsBudget:      libconfig.EnvName(envPrefix, "sweep_orphan_blobs_budget"),
+		OrphanBlobsStaleAge:    libconfig.EnvName(envPrefix, "sweep_orphan_blobs_stale_age"),
+	}
+	err := c.ExpiredUploads.finalize("expired_uploads", c.Env.ExpiredUploadsInterval, c.Env.ExpiredUploadsBudget,
+		defaultExpiredUploadsInterval, defaultExpiredUploadsBudget)
+	if err != nil {
+		return err
+	}
+	err = c.PendingBlobs.finalize("pending_blobs", c.Env.PendingBlobsInterval, c.Env.PendingBlobsBudget, c.Env.PendingBlobsStaleAge,
+		defaultPendingBlobsInterval, defaultPendingBlobsBudget, defaultPendingBlobsStaleAge)
+	if err != nil {
+		return err
+	}
+	return c.OrphanBlobs.finalize("orphan_blobs", c.Env.OrphanBlobsInterval, c.Env.OrphanBlobsBudget, c.Env.OrphanBlobsStaleAge,
+		defaultOrphanBlobsInterval, defaultOrphanBlobsBudget, defaultOrphanBlobsStaleAge)
+}
+
+func (p *StalePolicy) finalize(name, intervalEnv, budgetEnv, staleAgeEnv string, interval time.Duration, budget int, staleAge time.Duration) error {
+	if err := p.SweepPolicy.finalize(name, intervalEnv, budgetEnv, interval, budget); err != nil {
+		return err
+	}
+	if p.StaleAge == nil {
+		p.StaleAge = new(libconfig.Duration(staleAge))
+	}
+	if err := libconfig.SetDurationFromEnv(&p.StaleAge, staleAgeEnv); err != nil {
+		return err
+	}
+	if *p.StaleAge <= 0 {
+		return fmt.Errorf("%s.stale_age must be positive, got %s", name, *p.StaleAge)
+	}
+	return nil
+}
+
+func (p *SweepPolicy) finalize(name, intervalEnv, budgetEnv string, interval time.Duration, budget int) error {
+	if p.Interval == nil {
+		p.Interval = new(libconfig.Duration(interval))
+	}
+	if p.Budget == nil {
+		p.Budget = new(budget)
+	}
+	if err := libconfig.SetDurationFromEnv(&p.Interval, intervalEnv); err != nil {
+		return err
+	}
+	if err := libconfig.SetFromEnv(&p.Budget, budgetEnv, strconv.Atoi); err != nil {
+		return err
+	}
+	if *p.Interval <= 0 {
+		return fmt.Errorf("%s.interval must be positive, got %s", name, *p.Interval)
+	}
+	if *p.Budget < 1 {
+		return fmt.Errorf("%s.budget must be at least 1, got %d", name, *p.Budget)
+	}
+	return nil
+}

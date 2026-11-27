@@ -81,6 +81,67 @@ func TestFilter_EveryMalformedEntryNamed(t *testing.T) {
 	}
 }
 
+var contract = []query.Field{
+	{Name: "id", Type: "uuid", NotNull: true},
+	{Name: "route", Type: "text", NotNull: true},
+	{Name: "kind", Type: "text"},
+	{Name: "duration", Type: "double precision"},
+	{Name: "public", Type: "boolean"},
+}
+
+func TestFilter_CheckAcceptsWhatTheContractDeclares(t *testing.T) {
+	for _, filter := range []string{
+		`[{"field":"route","op":"eq","value":"video"}]`,
+		`[{"field":"route","op":"eq","value":"audio"}]`,
+		`[{"field":"route","op":"in","value":["vision","vision-converted"]}]`,
+		`[{"field":"route","op":"in","value":["audio","video"]},{"field":"duration","op":"gt","value":120}]`,
+		`[{"field":"kind","op":"like","value":"m%"},{"field":"duration","op":"le","value":1.5},{"field":"kind","op":"null"},{"field":"duration","op":"notnull"}]`,
+		`[{"field":"id","op":"ne","value":"0190a5d1-7a2b-7c3d-8e4f-000000000001"},{"field":"public","op":"eq","value":true}]`,
+	} {
+		if err := decode(t, `{"filter":`+filter+`}`).Filter.Check(contract); err != nil {
+			t.Errorf("Check(%s) = %v, want nil", filter, err)
+		}
+	}
+}
+
+func TestFilter_CheckRefusesWhatDoesNotFitTheContract(t *testing.T) {
+	cases := []struct {
+		name, filter, want string
+		unknown            bool
+	}{
+		{"an undeclared field", `[{"field":"route","op":"null"},{"field":"title","op":"eq","value":"x"}]`, `filter[1]: query: unknown filter field "title"`, true},
+		{"a number for a text field", `[{"field":"route","op":"eq","value":5}]`, `filter[0]: query: invalid value for "route": a text field takes a string, not 5`, false},
+		{"a string for a numeric field", `[{"field":"duration","op":"gt","value":"120"}]`, `filter[0]: query: invalid value for "duration": a double precision field takes a number, not "120"`, false},
+		{"a boolean for a text field", `[{"field":"kind","op":"ne","value":true}]`, `filter[0]: query: invalid value for "kind"`, false},
+		{"a number for a uuid field", `[{"field":"id","op":"eq","value":1}]`, `filter[0]: query: invalid value for "id"`, false},
+		{"a string for a boolean field", `[{"field":"public","op":"eq","value":"yes"}]`, `filter[0]: query: invalid value for "public"`, false},
+		{"one wrong value in a list", `[{"field":"duration","op":"in","value":[1,"x"]}]`, `filter[0]: query: invalid value for "duration": a double precision field takes a number, not "x"`, false},
+		{"like on a numeric field", `[{"field":"duration","op":"like","value":"1%"}]`, `filter[0]: query: invalid value for "duration": op "like" applies to a text field`, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := decode(t, `{"filter":`+c.filter+`}`).Filter.Check(contract)
+			if !errors.Is(err, contexts.ErrValidation) || !strings.Contains(err.Error(), c.want) {
+				t.Fatalf("Check = %v, want ErrValidation naming %q", err, c.want)
+			}
+			if _, ok := errors.AsType[*query.UnknownFieldError](err); ok != c.unknown {
+				t.Errorf("Check = %v, an UnknownFieldError: %v, want %v", err, ok, c.unknown)
+			}
+			if _, ok := errors.AsType[*query.InvalidValueError](err); ok == c.unknown {
+				t.Errorf("Check = %v, an InvalidValueError: %v, want %v", err, ok, !c.unknown)
+			}
+		})
+	}
+}
+
+func TestFilter_CheckNamesEveryConditionThatDoesNotFit(t *testing.T) {
+	f := decode(t, `{"filter":[{"field":"a","op":"null"},{"field":"route","op":"null"},{"field":"duration","op":"eq","value":"x"}]}`).Filter
+	err := f.Check(contract)
+	if err == nil || !strings.Contains(err.Error(), "filter[0]") || strings.Contains(err.Error(), "filter[1]") || !strings.Contains(err.Error(), "filter[2]") {
+		t.Errorf("Check = %v, want filter[0] and filter[2] named, and filter[1] not", err)
+	}
+}
+
 func TestFilter_QueryMapsOntoSqlateFilters(t *testing.T) {
 	f := decode(t, `{"filter":[{"field":"a","op":"eq","value":"x"},{"field":"b","op":"in","value":[1,"y"]},{"field":"c","op":"null"}]}`).Filter
 	got, err := f.Query()
