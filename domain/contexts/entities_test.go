@@ -112,3 +112,31 @@ func TestFilter_RoundTripsItsJSON(t *testing.T) {
 		t.Errorf("Scan(nil) = %v, %v, want the nil filter", none, err)
 	}
 }
+
+func TestMoveContext_Validate(t *testing.T) {
+	cases := []struct {
+		name, body, want string
+	}{
+		{"a parent alone", `{"parent_id":"` + contexts.Root + `"}`, ""},
+		{"a parent and a name", `{"parent_id":"` + contexts.Root + `","name":"n"}`, ""},
+		{"a null name", `{"parent_id":"` + contexts.Root + `","name":null}`, ""},
+		{"a malformed parent", `{"parent_id":"x"}`, "parent_id must be a UUID"},
+		{"no parent", `{"name":"n"}`, "parent_id must be a UUID"},
+		{"an empty name", `{"parent_id":"` + contexts.Root + `","name":""}`, "name must not be empty"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var m contexts.MoveContext
+			if err := json.Unmarshal([]byte(c.body), &m); err != nil {
+				t.Fatal(err)
+			}
+			err := m.Validate()
+			if c.want == "" && err != nil {
+				t.Errorf("Validate = %v, want nil", err)
+			}
+			if c.want != "" && (!errors.Is(err, contexts.ErrValidation) || !strings.Contains(err.Error(), c.want)) {
+				t.Errorf("Validate = %v, want ErrValidation naming %q", err, c.want)
+			}
+		})
+	}
+}

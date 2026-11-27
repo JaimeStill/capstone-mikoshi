@@ -20,22 +20,28 @@ import (
 var files embed.FS
 
 type store struct {
-	db       *data.Database
-	findRows query.Rows[Context]
-	children query.Projection[Context]
-	create   query.Returning[Context]
-	rename   query.Returning[Context]
+	db        *data.Database
+	findRows  query.Rows[Context]
+	children  query.Projection[Context]
+	create    query.Returning[Context]
+	rename    query.Returning[Context]
+	move      query.Returning[Context]
+	subtree   query.Rows[Node]
+	inSubtree query.Rows[int64]
 }
 
 func newStore(db *data.Database) *store {
 	stmts := db.Catalog.MustCompile(files, "statements", db.Dialect())
 	scan := query.Scanner[Context]()
 	return &store{
-		db:       db,
-		findRows: stmts.Statement("find").Scan(scan),
-		children: stmts.Statement("children").Project(scan),
-		create:   stmts.Statement("create").Returning(scan),
-		rename:   stmts.Statement("rename").Returning(scan),
+		db:        db,
+		findRows:  stmts.Statement("find").Scan(scan),
+		children:  stmts.Statement("children").Project(scan),
+		create:    stmts.Statement("create").Returning(scan),
+		rename:    stmts.Statement("rename").Returning(scan),
+		move:      stmts.Statement("move").Returning(scan),
+		subtree:   stmts.Statement("subtree").Scan(query.Scanner[Node]()),
+		inSubtree: stmts.Statement("in_subtree").Scan(query.Scalar[int64]),
 	}
 }
 
@@ -110,5 +116,54 @@ func (s *store) insert(ctx context.Context, c CreateContext) (Context, error) {
 			return Context{}, fmt.Errorf("%w: %q under %s", ErrNameTaken, c.Name, c.ParentID)
 		}
 		return created, err
+	}, nil)
+}
+
+func (s *store) resolveSubtree(ctx context.Context, id string) ([]Node, error) {
+	nodes, err := s.subtree.All(ctx, s.db, query.Args{"id": id})
+	if err != nil {
+		return nil, err
+	}
+	if len(nodes) == 0 {
+		return nil, sql.ErrNoRows
+	}
+	return nodes, nil
+}
+
+func (s *store) relocate(ctx context.Context, id string, m MoveContext) (Context, error) {
+	return s.db.Transact(ctx, func(tx *sqlate.Tx) (Context, error) {
+		if err := s.db.Lock(ctx, tx, data.LockContextTree); err != nil {
+			return Context{}, err
+		}
+		moved, err := s.find(ctx, tx, id)
+		if err != nil {
+			return Context{}, err
+		}
+		parent, err := s.find(ctx, tx, m.ParentID)
+		if errors.Is(err, sql.ErrNoRows) {
+			return Context{}, fmt.Errorf("%w: %s", ErrParentNotFound, m.ParentID)
+		}
+		if err != nil {
+			return Context{}, err
+		}
+		if parent.Kind == KindQuery {
+			return Context{}, fmt.Errorf("%w: %s", ErrQueryParent, m.ParentID)
+		}
+		n, err := s.inSubtree.One(ctx, tx, query.Args{"node": id, "candidate": m.ParentID})
+		if err != nil {
+			return Context{}, err
+		}
+		if n > 0 {
+			return Context{}, fmt.Errorf("%w: %s is in the subtree of %s", ErrCycle, m.ParentID, id)
+		}
+		name := moved.Name
+		if m.Name != nil {
+			name = *m.Name
+		}
+		updated, _, err := s.move.One(ctx, tx, query.Args{"id": id, "parent_id": m.ParentID, "name": name})
+		if errors.Is(err, sqlate.ErrUniqueViolation) {
+			return Context{}, fmt.Errorf("%w: %q under %s", ErrNameTaken, name, m.ParentID)
+		}
+		return updated, err
 	}, nil)
 }

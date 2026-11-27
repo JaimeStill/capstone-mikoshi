@@ -93,6 +93,34 @@ func (r RenameContext) Validate() error {
 	return nil
 }
 
+// MoveContext is the move command's input: the context's new parent and,
+// when set, its new name; a nil name keeps the one it has.
+type MoveContext struct {
+	ParentID string  `json:"parent_id"`
+	Name     *string `json:"name"`
+}
+
+// Validate rejects a parent id that is not a UUID and a set but empty
+// name. The parent's existence and kind, the cycle check, and the name's
+// uniqueness among the new siblings are the store's.
+func (m MoveContext) Validate() error {
+	var errs []error
+	if _, err := uuid.Parse(m.ParentID); err != nil {
+		errs = append(errs, fmt.Errorf("%w: parent_id must be a UUID", ErrValidation))
+	}
+	if m.Name != nil && *m.Name == "" {
+		errs = append(errs, fmt.Errorf("%w: name must not be empty", ErrValidation))
+	}
+	return errors.Join(errs...)
+}
+
+// Node is one context of a subtree as its resolution presents it: its id
+// and kind. The json tags are the scan contract.
+type Node struct {
+	ID   string `json:"id"`
+	Kind Kind   `json:"kind"`
+}
+
 // Filter is a query context's filter: its conditions, every one of which
 // an item must meet. It is stored as a JSON array, and its zero value, nil,
 // is an explicit context's absent filter.

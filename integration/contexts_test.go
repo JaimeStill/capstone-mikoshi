@@ -4,17 +4,25 @@ package integration_test
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"maps"
 	"net/http"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 	"uuid"
 
 	"github.com/standards-lab/go-web-sdk"
 	"github.com/standards-lab/go-web-sdk/webtest"
+	"github.com/standards-lab/sqlate/postgres/pgtest"
+	"github.com/standards-lab/sqlate/query"
 
+	"github.com/JaimeStill/capstone-mikoshi/data"
 	"github.com/JaimeStill/capstone-mikoshi/domain/contexts"
 	"github.com/JaimeStill/capstone-mikoshi/integration"
 )
@@ -368,5 +376,268 @@ func TestContexts_RenameRefusals(t *testing.T) {
 	}
 	if p := c.Put(t, "/api/contexts/not-a-uuid", `{"name":"n"}`).Problem(t, http.StatusBadRequest); !strings.Contains(p.Detail, "not-a-uuid") {
 		t.Errorf("detail = %q, want the malformed id named", p.Detail)
+	}
+}
+
+func domainService(t *testing.T) (*contexts.Service, *pgtest.Database, *webtest.Client) {
+	t.Helper()
+	db := integration.Database(t)
+	c := integration.Start(t, integration.Options{Database: db}).Client()
+	return contexts.New(data.New(db.Session(), query.MustCatalog(query.Patterns()))), db, c
+}
+
+func move(t *testing.T, c *webtest.Client, id, body string) contexts.Context {
+	t.Helper()
+	return webtest.Decode[contexts.Context](t, c.Post(t, "/api/contexts/"+id+"/move", body), http.StatusOK)
+}
+
+func moveTo(parent string) string { return `{"parent_id":"` + parent + `"}` }
+
+func subtree(t *testing.T, s *contexts.Service, id string) map[string]contexts.Kind {
+	t.Helper()
+	nodes, err := s.Subtree(t.Context(), id)
+	if err != nil {
+		t.Fatalf("Subtree(%s) = %v", id, err)
+	}
+	out := make(map[string]contexts.Kind, len(nodes))
+	for _, n := range nodes {
+		if _, seen := out[n.ID]; seen {
+			t.Errorf("Subtree(%s) holds %s twice", id, n.ID)
+		}
+		out[n.ID] = n.Kind
+	}
+	return out
+}
+
+func TestContexts_MoveCarriesTheSubtree(t *testing.T) {
+	s, _, c := domainService(t)
+
+	from := createContext(t, c, explicit(contexts.Root, "from"))
+	to := createContext(t, c, explicit(contexts.Root, "to"))
+	moved := createContext(t, c, explicit(from.ID, "moved"))
+	grandchild := createContext(t, c, explicit(moved.ID, "grandchild"))
+	leaf := createContext(t, c, queryContext(moved.ID, "leaf", `[{"field":"a","op":"null"}]`))
+	deep := createContext(t, c, explicit(grandchild.ID, "deep"))
+
+	got := move(t, c, moved.ID, moveTo(to.ID))
+	if got.ID != moved.ID || got.Name != "moved" || got.ParentID == nil || *got.ParentID != to.ID || !got.CreatedAt.Equal(moved.CreatedAt) {
+		t.Errorf("moved = %+v, want %s named moved under %s", got, moved.ID, to.ID)
+	}
+	if read := webtest.Decode[contexts.Context](t, c.Get(t, "/api/contexts/"+moved.ID), http.StatusOK); !sameContext(t, read, got) {
+		t.Errorf("read %+v, want %+v", read, got)
+	}
+
+	if names := names(childPage(t, c, "/api/contexts/"+from.ID+"/children").Items); len(names) != 0 {
+		t.Errorf("children of the old parent = %v, want none", names)
+	}
+	if names := names(childPage(t, c, "/api/contexts/"+to.ID+"/children").Items); !slices.Equal(names, []string{"moved"}) {
+		t.Errorf("children of the new parent = %v, want [moved]", names)
+	}
+	if names := names(childPage(t, c, "/api/contexts/"+moved.ID+"/children").Items); !slices.Equal(names, []string{"grandchild", "leaf"}) {
+		t.Errorf("children of the moved context = %v, want [grandchild leaf]", names)
+	}
+	under := childPage(t, c, "/api/contexts/"+grandchild.ID+"/children").Items
+	if len(under) != 1 || under[0].ID != deep.ID || *under[0].ParentID != grandchild.ID {
+		t.Errorf("children of the grandchild = %+v, want deep under it", under)
+	}
+
+	want := map[string]contexts.Kind{
+		to.ID: contexts.KindExplicit, moved.ID: contexts.KindExplicit, grandchild.ID: contexts.KindExplicit,
+		leaf.ID: contexts.KindQuery, deep.ID: contexts.KindExplicit,
+	}
+	if got := subtree(t, s, to.ID); !maps.Equal(got, want) {
+		t.Errorf("subtree of the new parent = %v, want %v", got, want)
+	}
+	if got := subtree(t, s, grandchild.ID); !maps.Equal(got, map[string]contexts.Kind{grandchild.ID: contexts.KindExplicit, deep.ID: contexts.KindExplicit}) {
+		t.Errorf("subtree of the grandchild = %v, want it and deep", got)
+	}
+	if got := subtree(t, s, from.ID); !maps.Equal(got, map[string]contexts.Kind{from.ID: contexts.KindExplicit}) {
+		t.Errorf("subtree of the old parent = %v, want it alone", got)
+	}
+}
+
+func TestContexts_MoveWithRename(t *testing.T) {
+	c := integration.Start(t, integration.Options{}).Client()
+
+	to := createContext(t, c, explicit(contexts.Root, "to"))
+	createContext(t, c, explicit(to.ID, "draft"))
+	draft := createContext(t, c, explicit(contexts.Root, "draft"))
+
+	got := move(t, c, draft.ID, `{"parent_id":"`+to.ID+`","name":"final"}`)
+	if got.Name != "final" || got.ParentID == nil || *got.ParentID != to.ID {
+		t.Errorf("moved = %+v, want final under %s", got, to.ID)
+	}
+	if names := names(childPage(t, c, "/api/contexts/"+to.ID+"/children").Items); !slices.Equal(names, []string{"draft", "final"}) {
+		t.Errorf("children = %v, want [draft final]", names)
+	}
+
+	back := move(t, c, draft.ID, `{"parent_id":"`+contexts.Root+`","name":null}`)
+	if back.Name != "final" || *back.ParentID != contexts.Root {
+		t.Errorf("moved back = %+v, want final under the root, its name kept", back)
+	}
+}
+
+func TestContexts_MoveRefusals(t *testing.T) {
+	c := integration.Start(t, integration.Options{}).Client()
+
+	folder := createContext(t, c, explicit(contexts.Root, "folder"))
+	child := createContext(t, c, explicit(folder.ID, "child"))
+	grandchild := createContext(t, c, explicit(child.ID, "grandchild"))
+	saved := createContext(t, c, queryContext(contexts.Root, "saved", `[{"field":"a","op":"null"}]`))
+	createContext(t, c, explicit(contexts.Root, "taken"))
+	missing := uuid.NewV7().String()
+
+	conflicts := []struct {
+		name, id, body string
+		want           error
+	}{
+		{"under itself", folder.ID, moveTo(folder.ID), contexts.ErrCycle},
+		{"under its child", folder.ID, moveTo(child.ID), contexts.ErrCycle},
+		{"under its grandchild", folder.ID, moveTo(grandchild.ID), contexts.ErrCycle},
+		{"under a query context", child.ID, moveTo(saved.ID), contexts.ErrQueryParent},
+		{"the root", contexts.Root, moveTo(folder.ID), contexts.ErrRootFixed},
+		{"onto a sibling's name", child.ID, `{"parent_id":"` + contexts.Root + `","name":"taken"}`, contexts.ErrNameTaken},
+	}
+	for _, r := range conflicts {
+		t.Run(r.name, func(t *testing.T) {
+			if p := c.Post(t, "/api/contexts/"+r.id+"/move", r.body).Problem(t, http.StatusConflict); p.Detail != r.want.Error() {
+				t.Errorf("detail = %q, want %q", p.Detail, r.want.Error())
+			}
+		})
+	}
+
+	if p := c.Post(t, "/api/contexts/"+child.ID+"/move", moveTo(missing)).Problem(t, http.StatusNotFound); p.Detail != contexts.ErrParentNotFound.Error() {
+		t.Errorf("missing parent: detail = %q, want %q", p.Detail, contexts.ErrParentNotFound.Error())
+	}
+	unknown := "/api/contexts/" + missing + "/move"
+	if p := c.Post(t, unknown, moveTo(folder.ID)).Problem(t, http.StatusNotFound); p.Instance != unknown {
+		t.Errorf("unknown context: instance = %q, want %s", p.Instance, unknown)
+	}
+
+	invalid := []struct{ name, id, body, want string }{
+		{"a malformed id", "not-a-uuid", moveTo(folder.ID), "not-a-uuid"},
+		{"a malformed parent", child.ID, moveTo("x"), "parent_id must be a UUID"},
+		{"no parent", child.ID, `{"name":"n"}`, "parent_id must be a UUID"},
+		{"an empty name", child.ID, `{"parent_id":"` + contexts.Root + `","name":""}`, "name must not be empty"},
+	}
+	for _, r := range invalid {
+		if p := c.Post(t, "/api/contexts/"+r.id+"/move", r.body).Problem(t, http.StatusBadRequest); !strings.Contains(p.Detail, r.want) {
+			t.Errorf("%s: detail = %q, want it naming %q", r.name, p.Detail, r.want)
+		}
+	}
+
+	for _, w := range []struct{ ctx, parent, name string }{
+		{folder.ID, contexts.Root, "folder"}, {child.ID, folder.ID, "child"}, {grandchild.ID, child.ID, "grandchild"},
+	} {
+		read := webtest.Decode[contexts.Context](t, c.Get(t, "/api/contexts/"+w.ctx), http.StatusOK)
+		if read.ParentID == nil || *read.ParentID != w.parent || read.Name != w.name {
+			t.Errorf("after the refusals %+v, want %s under %s", read, w.name, w.parent)
+		}
+	}
+}
+
+func TestContexts_SubtreeResolution(t *testing.T) {
+	s, _, c := domainService(t)
+
+	folder := createContext(t, c, explicit(contexts.Root, "folder"))
+	leaf := createContext(t, c, explicit(folder.ID, "leaf"))
+	saved := createContext(t, c, queryContext(folder.ID, "saved", `[{"field":"a","op":"null"}]`))
+
+	if got := subtree(t, s, leaf.ID); !maps.Equal(got, map[string]contexts.Kind{leaf.ID: contexts.KindExplicit}) {
+		t.Errorf("subtree of an explicit leaf = %v, want it alone", got)
+	}
+	if got := subtree(t, s, saved.ID); !maps.Equal(got, map[string]contexts.Kind{saved.ID: contexts.KindQuery}) {
+		t.Errorf("subtree of a query context = %v, want it alone, a query", got)
+	}
+	want := map[string]contexts.Kind{folder.ID: contexts.KindExplicit, leaf.ID: contexts.KindExplicit, saved.ID: contexts.KindQuery}
+	if got := subtree(t, s, folder.ID); !maps.Equal(got, want) {
+		t.Errorf("subtree of the folder = %v, want %v", got, want)
+	}
+	if _, err := s.Subtree(t.Context(), uuid.NewV7().String()); !errors.Is(err, sql.ErrNoRows) {
+		t.Errorf("Subtree of an unknown context = %v, want sql.ErrNoRows", err)
+	}
+	if _, err := s.Subtree(t.Context(), "x"); !errors.Is(err, contexts.ErrValidation) {
+		t.Errorf("Subtree of a malformed id = %v, want ErrValidation", err)
+	}
+}
+
+func TestContexts_WalksTerminateOnACycle(t *testing.T) {
+	s, db, c := domainService(t)
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+
+	a := createContext(t, c, explicit(contexts.Root, "a"))
+	b := createContext(t, c, explicit(a.ID, "b"))
+	outside := createContext(t, c, explicit(contexts.Root, "outside"))
+	if _, err := db.Pool.ExecContext(ctx, `UPDATE context SET parent_id = $1 WHERE id = $2`, b.ID, a.ID); err != nil {
+		t.Fatalf("force the cycle: %v", err)
+	}
+
+	nodes, err := s.Subtree(ctx, a.ID)
+	if err != nil {
+		t.Fatalf("descendant walk on a cycle = %v", err)
+	}
+	if len(nodes) != 2 {
+		t.Errorf("descendant walk on a cycle = %+v, want a and b once each", nodes)
+	}
+
+	if _, err := s.Move(ctx, a.ID, contexts.MoveContext{ParentID: b.ID}); !errors.Is(err, contexts.ErrCycle) {
+		t.Errorf("ancestor walk on a cycle, a under b = %v, want ErrCycle", err)
+	}
+	got, err := s.Move(ctx, outside.ID, contexts.MoveContext{ParentID: a.ID})
+	if err != nil || got.ParentID == nil || *got.ParentID != a.ID {
+		t.Errorf("ancestor walk on a cycle, outside under a = %+v, %v, want it moved", got, err)
+	}
+}
+
+func TestContexts_OpposingMovesCommitOne(t *testing.T) {
+	s, db, _ := domainService(t)
+	ctx := t.Context()
+
+	const pairs = 100
+	for i := range pairs {
+		a, err := s.Create(ctx, contexts.CreateContext{ParentID: contexts.Root, Name: fmt.Sprintf("a%d", i), Kind: contexts.KindExplicit})
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, err := s.Create(ctx, contexts.CreateContext{ParentID: contexts.Root, Name: fmt.Sprintf("b%d", i), Kind: contexts.KindExplicit})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		start := make(chan struct{})
+		errs := make([]error, 2)
+		var wg sync.WaitGroup
+		for j, m := range [][2]string{{a.ID, b.ID}, {b.ID, a.ID}} {
+			wg.Go(func() {
+				<-start
+				_, errs[j] = s.Move(ctx, m[0], contexts.MoveContext{ParentID: m[1]})
+			})
+		}
+		close(start)
+		wg.Wait()
+
+		committed, cycles := 0, 0
+		for _, err := range errs {
+			switch {
+			case err == nil:
+				committed++
+			case errors.Is(err, contexts.ErrCycle):
+				cycles++
+			default:
+				t.Errorf("pair %d: move = %v, want it committed or ErrCycle", i, err)
+			}
+		}
+		if committed != 1 || cycles != 1 {
+			t.Errorf("pair %d: %d committed and %d cycles, want one of each", i, committed, cycles)
+		}
+	}
+
+	var rows int
+	if err := db.Pool.QueryRowContext(ctx, `SELECT COUNT(*) FROM context`).Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
+	if reached := subtree(t, s, contexts.Root); len(reached) != rows {
+		t.Errorf("the walk from the root reaches %d of %d contexts, want every one: a move made a cycle", len(reached), rows)
 	}
 }

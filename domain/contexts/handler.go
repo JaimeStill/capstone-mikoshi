@@ -20,12 +20,14 @@ type handler struct {
 }
 
 // Routes builds the layer's route group, /contexts: the create, the read
-// by id, the read of a context's children, paged under limits, and the
-// rename, a PUT of the context's name. logger records the cause of every
+// by id, the read of a context's children, paged under limits, the
+// rename, a PUT of the context's name, and the move, a POST that sets the
+// context's parent and, optionally, its name. logger records the cause of every
 // 5xx the group's error writer sends. Every refusal is a problem response:
 // invalid input or a cursor the read did not issue a 400, an unknown
-// context or parent a 404, and a sibling's name, a query parent, or a
-// rename of the root a 409; an unreachable database is a 503.
+// context or parent a 404, and a sibling's name, a query parent, a rename
+// or move of the root, or a move into the context's own subtree a 409; an
+// unreachable database is a 503.
 func Routes(service *Service, limits web.Limits, logger *slog.Logger) *web.Group {
 	h := &handler{service: service, limits: limits}
 	g := web.NewGroup("/contexts")
@@ -34,6 +36,7 @@ func Routes(service *Service, limits web.Limits, logger *slog.Logger) *web.Group
 	g.HandleErr("GET", "/{id}", h.find)
 	g.HandleErr("GET", "/{id}/children", h.children)
 	g.HandleErr("PUT", "/{id}", h.rename)
+	g.HandleErr("POST", "/{id}/move", h.move)
 	return g
 }
 
@@ -94,6 +97,22 @@ func (h *handler) rename(w http.ResponseWriter, r *http.Request) error {
 	return web.WriteJSON(w, http.StatusOK, c)
 }
 
+func (h *handler) move(w http.ResponseWriter, r *http.Request) error {
+	id, err := web.PathUUID(r, "id")
+	if err != nil {
+		return err
+	}
+	body, err := web.DecodeJSON[MoveContext](w, r, maxCommandBody)
+	if err != nil {
+		return err
+	}
+	c, err := h.service.Move(r.Context(), id, body)
+	if err != nil {
+		return err
+	}
+	return web.WriteJSON(w, http.StatusOK, c)
+}
+
 func status(err error) (web.Problem, bool) {
 	switch {
 	case errors.Is(err, ErrValidation), errors.Is(err, query.ErrDirectives):
@@ -108,6 +127,8 @@ func status(err error) (web.Problem, bool) {
 		return web.Problem{Status: http.StatusConflict, Detail: ErrQueryParent.Error()}, true
 	case errors.Is(err, ErrRootFixed):
 		return web.Problem{Status: http.StatusConflict, Detail: ErrRootFixed.Error()}, true
+	case errors.Is(err, ErrCycle):
+		return web.Problem{Status: http.StatusConflict, Detail: ErrCycle.Error()}, true
 	case errors.Is(err, database.ErrNotReady), errors.Is(err, sqlate.ErrConnectionFailed):
 		return web.Problem{Status: http.StatusServiceUnavailable}, true
 	}

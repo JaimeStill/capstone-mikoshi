@@ -11,8 +11,9 @@ import (
 )
 
 // Service is the contexts domain service: the layer's public API, one
-// method per endpoint, every operation delegated to the store. A command
-// validates its input before it reaches the store.
+// method per endpoint and one for the subtree resolution, every operation
+// delegated to the store. A command validates its input before it reaches
+// the store.
 type Service struct {
 	store *store
 }
@@ -76,4 +77,37 @@ func (s *Service) Rename(ctx context.Context, id string, r RenameContext) (Conte
 		return Context{}, ErrRootFixed
 	}
 	return s.store.setName(ctx, id, r.Name)
+}
+
+// Move sets the parent of the context with the given id and, when the
+// command names one, its name, and returns it as the read presents it; its
+// subtree moves with it. In one transaction it takes the tree lock, reads
+// the context and the new parent, and walks the new parent's ancestors
+// before it writes. A malformed id or command is ErrValidation, the root
+// ErrRootFixed, an unknown context sql.ErrNoRows, a missing parent
+// ErrParentNotFound, a query parent ErrQueryParent, a parent that is the
+// context or one of its descendants ErrCycle, and a name a sibling under
+// the new parent holds ErrNameTaken.
+func (s *Service) Move(ctx context.Context, id string, m MoveContext) (Context, error) {
+	parsed, err := uuid.Parse(id)
+	if err != nil {
+		return Context{}, fmt.Errorf("%w: id must be a UUID", ErrValidation)
+	}
+	if err := m.Validate(); err != nil {
+		return Context{}, err
+	}
+	if parsed.String() == Root {
+		return Context{}, ErrRootFixed
+	}
+	return s.store.relocate(ctx, parsed.String(), m)
+}
+
+// Subtree resolves the context with the given id to its subtree, the
+// context included, each node with its kind, in no stated order. A
+// malformed id is ErrValidation and an unknown context sql.ErrNoRows.
+func (s *Service) Subtree(ctx context.Context, id string) ([]Node, error) {
+	if _, err := uuid.Parse(id); err != nil {
+		return nil, fmt.Errorf("%w: id must be a UUID", ErrValidation)
+	}
+	return s.store.resolveSubtree(ctx, id)
 }

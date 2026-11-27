@@ -312,3 +312,121 @@ func TestService_RenameRefusals(t *testing.T) {
 		})
 	}
 }
+
+const parentID = "0190a5d1-7a2b-7c3d-8e4f-000000000002"
+
+func count(n int64) sqltest.Response {
+	return sqltest.Response{Columns: []string{"count"}, Rows: [][]driver.Value{{n}}}
+}
+
+func TestService_MoveLocksReadsChecksTheCycleThenUpdates(t *testing.T) {
+	s, rec := service(t, treeLocked(),
+		row(childID, contexts.Root, "kept", contexts.KindExplicit, nil),
+		row(parentID, contexts.Root, "folder", contexts.KindExplicit, nil),
+		count(0),
+		row(childID, parentID, "kept", contexts.KindExplicit, nil))
+	c, err := s.Move(context.Background(), childID, contexts.MoveContext{ParentID: parentID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.ParentID == nil || *c.ParentID != parentID || c.Name != "kept" {
+		t.Errorf("Move = %+v", c)
+	}
+	sameOps(t, rec, begin, x, q, q, q, q, commit)
+	calls := rec.Calls()
+	if lock := calls[1]; lock.SQL != "SELECT pg_advisory_xact_lock(hashtext($1))" || lock.Args[0] != data.LockContextTree {
+		t.Errorf("move did not take the tree lock first: %+v", lock)
+	}
+	if moved, parent := calls[2], calls[3]; moved.Args[0] != childID || parent.Args[0] != parentID {
+		t.Errorf("move read %v then %v, want the context then its new parent", moved.Args, parent.Args)
+	}
+	if walk := calls[4]; !strings.HasPrefix(walk.SQL, "WITH RECURSIVE up") || !slices.Equal(walk.Args, []any{parentID, childID}) {
+		t.Errorf("cycle check = %+v, want the walk up from the new parent", walk)
+	}
+	update := calls[5]
+	if !strings.HasPrefix(update.SQL, "UPDATE context SET parent_id = CAST($1 AS uuid), name = $2 WHERE id = CAST($3 AS uuid)") || !slices.Equal(update.Args, []any{parentID, "kept", childID}) {
+		t.Errorf("update = %+v, want the parent set and the name kept", update)
+	}
+}
+
+func TestService_MoveWithANameSetsIt(t *testing.T) {
+	s, rec := service(t, treeLocked(),
+		row(childID, contexts.Root, "old", contexts.KindExplicit, nil),
+		root(),
+		count(0),
+		row(childID, contexts.Root, "new", contexts.KindExplicit, nil))
+	name := "new"
+	if _, err := s.Move(context.Background(), childID, contexts.MoveContext{ParentID: contexts.Root, Name: &name}); err != nil {
+		t.Fatal(err)
+	}
+	if update := rec.Calls()[5]; update.Args[1] != "new" {
+		t.Errorf("update args = %v, want the new name", update.Args)
+	}
+}
+
+func TestService_MoveRefusals(t *testing.T) {
+	unique := &sqlate.ConstraintError{Constraint: "uq_context_sibling_name", Class: sqlate.ErrUniqueViolation, Err: errors.New("duplicate")}
+	moved := row(childID, contexts.Root, "m", contexts.KindExplicit, nil)
+	folder := row(parentID, contexts.Root, "folder", contexts.KindExplicit, nil)
+	queryParent := row(parentID, contexts.Root, "q", contexts.KindQuery, []byte(`[{"field":"f","op":"null"}]`))
+	none := sqltest.Response{Columns: []string{"id"}}
+	empty := ""
+	cases := []struct {
+		name      string
+		id        string
+		move      contexts.MoveContext
+		responses []sqltest.Response
+		want      error
+		ops       []sqltest.Op
+	}{
+		{"a malformed id", "x", contexts.MoveContext{ParentID: parentID}, nil, contexts.ErrValidation, nil},
+		{"a malformed parent", childID, contexts.MoveContext{ParentID: "x"}, nil, contexts.ErrValidation, nil},
+		{"an empty name", childID, contexts.MoveContext{ParentID: parentID, Name: &empty}, nil, contexts.ErrValidation, nil},
+		{"the root", contexts.Root, contexts.MoveContext{ParentID: parentID}, nil, contexts.ErrRootFixed, nil},
+		{"an unknown context", childID, contexts.MoveContext{ParentID: parentID}, []sqltest.Response{treeLocked(), none}, sql.ErrNoRows, []sqltest.Op{begin, x, q, rollback}},
+		{"a missing parent", childID, contexts.MoveContext{ParentID: parentID}, []sqltest.Response{treeLocked(), moved, none}, contexts.ErrParentNotFound, []sqltest.Op{begin, x, q, q, rollback}},
+		{"a query parent", childID, contexts.MoveContext{ParentID: parentID}, []sqltest.Response{treeLocked(), moved, queryParent}, contexts.ErrQueryParent, []sqltest.Op{begin, x, q, q, rollback}},
+		{"a parent in the subtree", childID, contexts.MoveContext{ParentID: parentID}, []sqltest.Response{treeLocked(), moved, folder, count(1)}, contexts.ErrCycle, []sqltest.Op{begin, x, q, q, q, rollback}},
+		{"a sibling's name", childID, contexts.MoveContext{ParentID: parentID}, []sqltest.Response{treeLocked(), moved, folder, count(0), {Err: unique}}, contexts.ErrNameTaken, []sqltest.Op{begin, x, q, q, q, q, rollback}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			s, rec := service(t, c.responses...)
+			if _, err := s.Move(context.Background(), c.id, c.move); !errors.Is(err, c.want) {
+				t.Errorf("Move = %v, want %v", err, c.want)
+			}
+			sameOps(t, rec, c.ops...)
+		})
+	}
+}
+
+func TestService_SubtreeWalksDownFromTheContext(t *testing.T) {
+	s, rec := service(t, sqltest.Response{
+		Columns: []string{"id", "kind"},
+		Rows:    [][]driver.Value{{childID, "explicit"}, {parentID, "query"}},
+	})
+	nodes, err := s.Subtree(context.Background(), childID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []contexts.Node{{ID: childID, Kind: contexts.KindExplicit}, {ID: parentID, Kind: contexts.KindQuery}}
+	if !slices.Equal(nodes, want) {
+		t.Errorf("Subtree = %+v, want %+v", nodes, want)
+	}
+	if walk := rec.Calls()[0]; !strings.HasPrefix(walk.SQL, "WITH RECURSIVE down") || walk.Args[0] != childID {
+		t.Errorf("walk = %+v", walk)
+	}
+}
+
+func TestService_SubtreeRefusals(t *testing.T) {
+	s, rec := service(t)
+	if _, err := s.Subtree(context.Background(), "x"); !errors.Is(err, contexts.ErrValidation) {
+		t.Errorf("Subtree = %v, want ErrValidation", err)
+	}
+	sameOps(t, rec)
+
+	s, _ = service(t, sqltest.Response{Columns: []string{"id", "kind"}})
+	if _, err := s.Subtree(context.Background(), childID); !errors.Is(err, sql.ErrNoRows) {
+		t.Errorf("Subtree = %v, want sql.ErrNoRows", err)
+	}
+}
