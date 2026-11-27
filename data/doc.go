@@ -16,8 +16,9 @@
 //     node runs it at startup, once the schema is current, and
 //     [Database.Registry] is the admin service's statements inventory.
 //   - [Migrations] and [AppSet]: Mikoshi's migration set, the chunks
-//     contract's records, the context tree, and the resumable uploads in
-//     progress under migrations/. The
+//     contract's records, the context tree, the resumable uploads in
+//     progress, and the items and the content-keyed blobs they name, under
+//     migrations/. The
 //     migrations use pgvector's vector type and HNSW index method; the
 //     composition root declares the extension to the migrator.
 package data

@@ -33,12 +33,13 @@ Only these packages import a provider or use pgvector:
 
 Every other package stays provider-free: the admin service receives the pool as a go-database
 `database.DB`, the domains receive the `sql` node's `data.Database`, the dialect-wrapped session
-and the pattern catalog their statements compile against, and a package that keeps objects
-receives the `storage` node's `storage.Store`, go-storage's standard tier. The integration
-harness and suite sit outside the service's process and reach the database and the gateway
-directly: the harness makes each test's database through sqlate's `postgres/pgtest` and reaches
-a bucket through go-storage's `s3`, and the suite names pgvector from `postgres/pgvector` and
-runs pgvector queries to prove the index. The package boundary is a convention held in review.
+and the pattern catalog their statements compile against, and a package that keeps objects, the
+items domain, receives the `storage` node's `storage.Store`, go-storage's standard tier. The
+integration harness and suite sit outside the service's process and reach the database and the
+gateway directly: the harness makes each test's database through sqlate's `postgres/pgtest` and
+reaches a bucket through go-storage's `s3`, and the suite names pgvector from `postgres/pgvector`
+and runs pgvector queries to prove the index. The package boundary is a convention held in
+review.
 
 sqlint holds each statement file to its tier. `mise run check` runs it under
 [`sqlint.toml`](../sqlint.toml), which fails a statement file in `domain/*/statements` or
@@ -70,6 +71,10 @@ migrations below, and leaves the configuration's shape and the other packages as
 - `0009_upload`: the `~` `CHECK` on the upload's SHA-256, `bytea` for its hash state, and
   `timestamptz` for its expiry.
 - `0010_upload_chunk`: `bytea` for a chunk's content.
+- `0011_blob`: the `~` `CHECK` on the blob's SHA-256, and `timestamptz` with its `now()` default
+  for the creation and update times.
+- `0012_item`: the `~` `CHECK` on the item's SHA-256, and `timestamptz` with its `now()` default
+  for the creation time.
 
 A port also changes the native statement files:
 
