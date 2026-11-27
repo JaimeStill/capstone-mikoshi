@@ -178,8 +178,8 @@ func TestLifecycle_ShutdownBoundedByTimeout(t *testing.T) {
 	if _, err := io.WriteString(conn, unterminatedHeaders); err != nil {
 		t.Fatalf("write partial request: %v", err)
 	}
-	const settleBeforeDrain = 50 * time.Millisecond
-	time.Sleep(settleBeforeDrain)
+	acceptedAfterTheStall := webtest.NewClient(s.URL())
+	acceptedAfterTheStall.Get(t, web.HealthPath).Expect(t, http.StatusOK)
 
 	began := time.Now()
 	code := s.Stop(t)

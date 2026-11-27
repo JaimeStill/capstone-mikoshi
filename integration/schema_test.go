@@ -164,27 +164,28 @@ func TestSchema_RecordsHoldTheContract(t *testing.T) {
 	}
 
 	refused := []struct {
-		name, query string
-		args        []any
+		name, constraint, query string
+		args                    []any
 	}{
-		{"a chunker identity twice", "INSERT INTO chunker (model, settings) VALUES ($1, $2)",
+		{"a chunker identity twice", "uq_chunker_identity", "INSERT INTO chunker (model, settings) VALUES ($1, $2)",
 			[]any{"intfloat/multilingual-e5-large", `{"model":"intfloat/multilingual-e5-large","runes":2000,"bound":512,"version":"2"}`}},
-		{"an uppercase SHA-256", "INSERT INTO source_occurrence (input_sha256, part_id, part_sha256, content_type, depth) VALUES ($1, '/', $1, 'text/plain', 0)",
+		{"an uppercase SHA-256", "cc_source_occurrence_input_sha256", "INSERT INTO source_occurrence (input_sha256, part_id, part_sha256, content_type, depth) VALUES ($1, '/', $1, 'text/plain', 0)",
 			[]any{strings.ToUpper(digest("other"))}},
-		{"a found part without a parent", "INSERT INTO source_occurrence (input_sha256, part_id, part_sha256, content_type, depth) VALUES ($1, '/x', $1, 'text/plain', 1)",
+		{"a found part without a parent", "cc_source_occurrence_parent_depth", "INSERT INTO source_occurrence (input_sha256, part_id, part_sha256, content_type, depth) VALUES ($1, '/x', $1, 'text/plain', 1)",
 			[]any{input}},
-		{"a source of no occurrence", "INSERT INTO source (input_sha256, part_id, kind, text_sha256) VALUES ($1, '/', 'output', $1)",
+		{"a source of no occurrence", "fk_source_occurrence", "INSERT INTO source (input_sha256, part_id, kind, text_sha256) VALUES ($1, '/', 'output', $1)",
 			[]any{digest("other")}},
-		{"a source of an unknown kind", "INSERT INTO source (input_sha256, part_id, kind, text_sha256) VALUES ($1, '/', 'summary', $1)",
+		{"a source of an unknown kind", "cc_source_kind", "INSERT INTO source (input_sha256, part_id, kind, text_sha256) VALUES ($1, '/', 'summary', $1)",
 			[]any{input}},
-		{"a chunk of no chunker", "INSERT INTO chunk (source_text_sha256, chunker, chunk_index, text, span_start, span_end, text_sha256) VALUES ($1, $2, 0, 't', 0, 1, $1)",
+		{"a chunk of no chunker", "fk_chunk_chunker", "INSERT INTO chunk (source_text_sha256, chunker, chunk_index, text, span_start, span_end, text_sha256) VALUES ($1, $2, 0, 't', 0, 1, $1)",
 			[]any{digest("t"), chunker + 1}},
-		{"a chunk whose span ends before it starts", "INSERT INTO chunk (source_text_sha256, chunker, chunk_index, text, span_start, span_end, text_sha256) VALUES ($1, $2, 1, 't', 2, 1, $1)",
+		{"a chunk whose span ends before it starts", "cc_chunk_span", "INSERT INTO chunk (source_text_sha256, chunker, chunk_index, text, span_start, span_end, text_sha256) VALUES ($1, $2, 1, 't', 2, 1, $1)",
 			[]any{digest("t"), chunker}},
 	}
 	for _, r := range refused {
-		if _, err := db.Pool.ExecContext(ctx, r.query, r.args...); err == nil {
-			t.Errorf("%s was accepted, want it refused", r.name)
+		_, err := db.Pool.ExecContext(ctx, r.query, r.args...)
+		if want := `constraint "` + r.constraint + `"`; err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s = %v, want it refused by %s", r.name, err, r.constraint)
 		}
 	}
 }

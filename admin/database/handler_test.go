@@ -236,6 +236,17 @@ func sendWithin(t *testing.T, h http.Handler, d time.Duration, path, body string
 	return rec
 }
 
+func exclusiveWaiting(gate *reactor.Gate) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	release, err := gate.Shared(ctx)
+	if err != nil {
+		return true
+	}
+	release()
+	return false
+}
+
 func TestUp_WaitsForTheSharedHolder(t *testing.T) {
 	gate := new(reactor.Gate)
 	turn, err := gate.Shared(context.Background())
@@ -246,11 +257,16 @@ func TestUp_WaitsForTheSharedHolder(t *testing.T) {
 
 	done := make(chan int, 1)
 	go func() { done <- send(t, h, "POST", "/database/schema/up", "").Code }()
-	time.Sleep(50 * time.Millisecond)
-	select {
-	case code := <-done:
-		t.Fatalf("up answered %d under a shared holder, want it waiting", code)
-	default:
+	deadline := time.Now().Add(2 * time.Second)
+	for !exclusiveWaiting(gate) {
+		select {
+		case code := <-done:
+			t.Fatalf("up answered %d under a shared holder, want it waiting", code)
+		default:
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("up never waited for the gate under a shared holder")
+		}
 	}
 	if calls := rec.Calls(); len(calls) != 0 {
 		t.Fatalf("up reached the database under a shared holder: %v", calls)
