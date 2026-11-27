@@ -58,6 +58,23 @@ func TestGraph_SchemaBetweenDatabaseAndServer(t *testing.T) {
 	}
 }
 
+func TestGraph_ServerReachesTheAdminMount(t *testing.T) {
+	a := app.New(configtest.Config(t), io.Discard)
+	n := a.Nodes()
+	sys, err := a.Graph().Build(n.Server)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	for _, r := range []graph.Ref{n.Schema, n.Gate, n.Database} {
+		if !sys.Has(r) {
+			t.Errorf("the server's Build does not reach %s\nlayers:\n%s", r.Name(), sys)
+		}
+	}
+	if slices.Contains(a.Roots(), graph.Ref(n.Schema)) {
+		t.Errorf("roots = %v, want the schema reached through the server, not listed", a.Roots())
+	}
+}
+
 func runSet(a *app.App, extra ...graph.Ref) []graph.Ref {
 	return append(append(a.Roots(), a.Nodes().LifecycleConfig), extra...)
 }

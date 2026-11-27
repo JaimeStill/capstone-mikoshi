@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/standards-lab/go-core/graph"
+	"github.com/standards-lab/go-core/reactor"
 	"github.com/standards-lab/go-database/admin"
 	"github.com/standards-lab/go-web-sdk"
 	"github.com/standards-lab/sqlate"
@@ -12,10 +13,12 @@ import (
 	"github.com/standards-lab/sqlate/postgres/pgvector"
 	"github.com/standards-lab/sqlate/query"
 
+	dbadmin "github.com/JaimeStill/capstone-mikoshi/admin/database"
 	"github.com/JaimeStill/capstone-mikoshi/data"
 )
 
 func defineAdmin(g *graph.Graph, n *Nodes) {
+	n.Gate = g.Fresh[reactor.Gate]("gate")
 	n.Schema = g.Define("schema", n.newSchema)
 }
 
@@ -38,5 +41,7 @@ func (n *Nodes) newSchema(s *graph.Scope) (*admin.Service, error) {
 }
 
 func mountAdmin(s *graph.Scope, n *Nodes) *web.Group {
-	return web.NewGroup("/admin")
+	g := web.NewGroup("/admin")
+	g.Mount(dbadmin.Routes(s.Use(n.Schema), s.Use(n.Gate), s.Use(n.Logger)))
+	return g
 }

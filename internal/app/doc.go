@@ -6,8 +6,8 @@
 //   - infrastructure.go: defineInfrastructure, the lifecycle configuration
 //     and the services the application is composed on (the logger and the
 //     database pool);
-//   - admin.go: defineAdmin, the administrative services, and their /admin
-//     mount;
+//   - admin.go: defineAdmin, the quiesce gate and the administrative
+//     services, and their /admin mount;
 //   - domain.go: defineDomain, the domain services, and their /api mount;
 //   - reactors.go: defineReactors, the process-lifetime entry points an
 //     occurrence drives, each a node whose value is a go-core
@@ -31,9 +31,9 @@
 // and cannot fail. [App.Graph] and [App.Nodes] publish the graph and its
 // handles, so a caller can Observe or Replace a node before Run. [App.Run]
 // is the hot start plus shutdown: it runs a go-web-sdk web.Service, which
-// builds [App.Roots], the server, the schema, and the reactors group, plus
-// the lifecycle config node, hands the System to go-core's lifecycle Coordinator, and
-// returns the process exit code. A constructor's error fails the Build,
+// builds [App.Roots], the server and the reactors group, plus the
+// lifecycle config node, hands the System to go-core's lifecycle
+// Coordinator, and returns the process exit code. A constructor's error fails the Build,
 // and Run writes "service failed: " and the error, which names the failing
 // node, to the stderr it is given; a wiring mistake panics during Build.
 //
@@ -91,10 +91,14 @@
 // version of pgvector the image offers, failing before any migration when
 // the image offers none, then applies the set; its Ready joins the
 // readiness probe under the schema's name, false while a migration or the
-// declaration is pending or mismatched. The /admin group ships empty until
-// the schema's route group mounts into it. In production the admin mount
-// belongs on its own listener, authenticated and unreachable from the
-// public API's network path.
+// declaration is pending or mismatched. Its route group, the admin/database
+// package's /database, mounts into the /admin group over the schema node
+// and the gate node, so the server reaches the schema through the router.
+// The gate is a fresh go-core reactor.Gate, the process's quiesce gate:
+// the schema-changing verbs hold it exclusively, and a reactor that works
+// over the schema holds it shared for each turn. In production the admin
+// mount belongs on its own listener, authenticated and unreachable from
+// the public API's network path.
 //
 // The domain layer has one node per domain layer. Domain services are
 // defined in the module's base-layer domain packages, one package per
