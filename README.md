@@ -15,9 +15,13 @@ repository's working context is [`context/README.md`](context/README.md).
 ```sh
 mise trust && mise install
 mise -C web install && mise -C web run install
+cp secrets.example.json secrets.json
+mise run db:up
 mise run serve
 ```
 
+The service needs its database: `db:up` starts the development PostgreSQL
+([Database](#database)), and startup fails, naming the database node, when it can't be reached.
 `serve` builds the web client in [`web/`](web/README.md) first; the service embeds the build and
 serves its shell at `/`. The service logs `server ready` on `localhost:8080` (the `local` overlay
 binds loopback and runs debug logging). From a second shell:
@@ -36,13 +40,16 @@ Each task wraps a plain command, so the repository works without mise:
 | Task | Command | What it does |
 |------|---------|--------------|
 | `mise run check` | `client:build`, `client:check`, then build, vet, `gofmt -l`, `go fix -diff`, `go mod tidy -diff`, `go test -race`, `golangci-lint run`, `lint-context`, `lint-references` | The check, as CI runs it; it writes nothing but the client's build, `web/dist/`, and the lints run at the project root and, when the project is nested in a git repository, at its top level |
-| `mise run currency` | `bash scripts/currency.sh` | Report requirements, Go version, tools, and action pins behind their latest; the client's report is `mise -C web run currency` |
-| `mise run upgrade` | `go mod edit -go=<current minor> -toolchain=none`, `go get <direct>@latest`, `go mod tidy`, `mise upgrade --bump --local` | Upgrade the go directive, requirements, and tools, rewriting `go.mod` and `mise.toml` |
+| `mise run currency` | `bash scripts/currency.sh report` | Report the tools, Go version, requirements, action pins, the PostgreSQL image tag, and the pgvector pin behind their latest; the client's report is `mise -C web run currency` |
+| `mise run upgrade` | `bash scripts/currency.sh upgrade` | Move every trailing pin `currency` reports, rewriting `mise.toml`, `go.mod`, `go.sum`, the workflows, and the compose files |
 | `mise run build` | `go build ./...` | Build the module |
 | `mise run vet` | `go vet -tags integration ./...` | Compile-check and vet, the integration suite included |
 | `mise run serve` | `go run ./cmd/server` | Run the service locally, after `client:build` |
 | `mise run test` | `go test -race ./...` | Run the unit tier, after `client:build` |
-| `mise run integration` | `go test -race -count=1 -tags integration ./integration/` | Run the integration tier against the built service, after `client:build` |
+| `mise run integration` | `docker compose up -d --wait --build postgres-integration`, `go test -race -count=1 -tags integration ./integration/` | Start the integration stack, run the integration tier against the built service, and tear the stack down, after `client:build` |
+| `mise run db:up` | `docker compose up -d --wait --build` | Build and start the development PostgreSQL and wait until it is healthy |
+| `mise run db:down` | `docker compose down` | Stop the development PostgreSQL, keeping its volume |
+| `mise run db:reset` | `docker compose down -v` | Stop the development PostgreSQL and drop its volume |
 | `mise run client:build` | `mise -C web run build` | Build the web client into `web/dist/`, which the service embeds |
 | `mise run client:check` | `mise -C web run check` | Run the web client's own check: lint, types, unit, and browser tests |
 | `mise run dev` | `vite build --watch` in `web/` beside `air` | Rebuild the client and restart the service on each change (`.air.toml`) |
@@ -72,13 +79,52 @@ a reactor sits below the server by its membership of the reactors group alone, a
 between nodes is dropped but one: the server's order after the reactors group, while the group
 is empty. Each check is shown failing on a fixture that breaks it, with the layer table.
 
-The template's suite asserts the baseline: boot, both probes, and the drain. The client's cases
-assert the shell at `/` and at a deep link, a built asset's caching, a missing asset's 404
-problem, and that the probes and `/api/` are not answered by the shell. As the build points
-fill in, each capability adds its cases beside them, and the first backing service brings its
-compose stack: the task then boots that stack as an isolated compose project on its own port,
-runs the suite, and tears it down with its volume on exit, so a developer's stack and data are
-never touched. The reference service shows the shape.
+The suite asserts the baseline: boot, both probes, the drain, and startup failing when the
+database can't be reached. The client's cases assert the shell at `/` and at a deep link, a
+built asset's caching, a missing asset's 404 problem, and that the probes and `/api/` are not
+answered by the shell. The admin and schema cases assert the migrated schema, pgvector's status,
+the empty seed states, space 1's index serving a nearest-neighbour query, and a wrong-dimension
+vector refused in space 1.
+
+## Database
+
+Mikoshi runs on PostgreSQL 19 with pgvector, built from
+[`compose/postgres/Dockerfile`](compose/postgres/Dockerfile). The development stack is the
+`postgres` service in [`compose.yml`](compose.yml), with its data in a named volume:
+
+- `mise run db:up` builds and starts it on `127.0.0.1:5440` and waits until it is healthy.
+- `mise run db:down` stops it and keeps the volume.
+- `mise run db:reset` stops it and drops the volume.
+
+`POSTGRES_PORT` moves the port. The local overlay points the service at `127.0.0.1:5440`, so a
+moved port needs `MIKOSHI_DATABASE_PORT` too.
+
+The service reads the `database` configuration block: `host`, `port`, `name`, `user`,
+`password`, the pool's limits, and the connection `options`. `config.json` names the `app`
+database and user with `sslmode=disable`, and `config.local.json` adds the loopback host and
+port. The password is never in a committed file: copy `secrets.example.json` to the gitignored
+`secrets.json`, which holds the development stack's password, or set `MIKOSHI_DATABASE_PASSWORD`.
+Each field has a `MIKOSHI_DATABASE_*` override, such as `MIKOSHI_DATABASE_HOST`.
+
+At startup the schema admin service installs pgvector at the version the image offers and
+applies the migrations in [`data/migrations`](data/migrations); `/readyz` reports the schema
+check. [Admin](docs/admin.md) covers the `/admin/database` mount, and [Stack](docs/stack.md)
+covers which packages may use pgvector and what a move to another engine changes.
+
+## Integration
+
+`mise run integration` runs the integration tier on a developer's machine, and CI's integration
+job runs the same task on push to main and on demand. The task:
+
+1. starts the `postgres-integration` service, under the `integration` compose profile, as the
+   isolated compose project `mikoshi-integration` on `127.0.0.1:5441`, with its data on tmpfs;
+2. runs the suite, where each test makes its own empty throwaway database on the server
+   `MIKOSHI_INTEGRATION_DSN` names and points the service at it through the
+   `MIKOSHI_DATABASE_*` variables;
+3. prints the stack's logs if the run fails, and tears the stack down.
+
+`POSTGRES_PORT` moves the integration port too, and `MIKOSHI_INTEGRATION_DSN` follows it. The
+integration stack never touches the development stack or its volume.
 
 ## Configuration
 
@@ -92,6 +138,9 @@ Configuration layers in a fixed precedence, later sources winning:
    - `MIKOSHI_LOG_LEVEL`, `MIKOSHI_LOG_FORMAT`
    - `MIKOSHI_SERVER_HOST`, `MIKOSHI_SERVER_PORT`, the four server timeout variables, and
      `MIKOSHI_SERVER_TRANSFER_RATE`
+   - `MIKOSHI_DATABASE_HOST`, `MIKOSHI_DATABASE_PORT`, `MIKOSHI_DATABASE_NAME`,
+     `MIKOSHI_DATABASE_USER`, `MIKOSHI_DATABASE_PASSWORD`, and the pool's variables
+     ([Database](#database))
    - `MIKOSHI_READS_DEFAULT_SIZE`, `MIKOSHI_READS_MAX_SIZE`
    - `MIKOSHI_SHUTDOWN_TIMEOUT`
 
