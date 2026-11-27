@@ -33,9 +33,10 @@
 // is the hot start plus shutdown: it runs a go-web-sdk web.Service, which
 // builds [App.Roots], the server and the reactors group, plus the
 // lifecycle config node, hands the System to go-core's lifecycle
-// Coordinator, and returns the process exit code. A constructor's error fails the Build,
-// and Run writes "service failed: " and the error, which names the failing
-// node, to the stderr it is given; a wiring mistake panics during Build.
+// Coordinator, and returns the process exit code. A constructor's error
+// fails the Build, and Run writes "service failed: " and the error, which
+// names the failing node, to the stderr it is given; a wiring mistake
+// panics during Build.
 //
 // What a node takes part in is inferred from its value's methods: a
 // lifecycle.Starter or Stopper is started or stopped, a Subsystem is both, a
@@ -72,10 +73,10 @@
 // provider; every package below it receives the pool as a go-database
 // database.DB. The pool's Start pings the database, so an unreachable
 // database fails startup with an error naming the database node, and its
-// Ready joins the readiness probe under that name. A service whose value implements lifecycle.Subsystem takes part in
-// startup and shutdown through its own methods, and its constructor opens
-// nothing: connectivity belongs to its Start, so a failed Build leaks no
-// connections.
+// Ready joins the readiness probe under that name. A service whose value
+// implements lifecycle.Subsystem takes part in startup and shutdown
+// through its own methods, and its constructor opens nothing: connectivity
+// belongs to its Start, so a failed Build leaks no connections.
 //
 // The admin layer is the administrative counterpart of the domain layer:
 // one node per admin domain, each administering one infrastructure service

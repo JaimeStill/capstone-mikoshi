@@ -20,11 +20,10 @@ var ErrUnconfirmed = errors.New(`database: a reset reverts every migration set a
 // the schema: that its background work over the schema pause. Exclusive
 // waits for every shared holder to release and holds every later one off
 // until its own release, or returns ctx's error, holding nothing, if ctx ends
-// first. The composition root injects the process's quiesce gate. Today
-// nothing else holds it, so the verbs only exclude one another; ingest's
-// reactors will hold it shared for each turn, so a schema change never
-// runs under a turn. The gate is per process: with several replicas, another
-// replica's work can still meet a schema change.
+// first. The composition root injects the process's quiesce gate, which a
+// reactor that works over the schema holds shared for each turn, so a
+// schema change never runs under a turn. The gate is per process: with
+// several replicas, another replica's work can still meet a schema change.
 type SchemaGate interface {
 	Exclusive(ctx context.Context) (release func(), err error)
 }

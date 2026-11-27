@@ -13,10 +13,11 @@ import (
 const envPrefix = "mikoshi"
 
 // Config is the service's root configuration: the library capability blocks
-// (the database among them) plus the service-owned read policy. It embeds the lifecycle Coordinator's
-// configuration by value and untagged, so its shutdown_timeout is a
-// top-level key and ShutdownTimeout a promoted field; Config.Config is that
-// lifecycle block, the one the composition root hands the Coordinator.
+// (the database among them) plus the service-owned read policy. It embeds
+// the lifecycle Coordinator's configuration by value and untagged, so its
+// shutdown_timeout is a top-level key and ShutdownTimeout a promoted field;
+// Config.Config is that lifecycle block, the one the composition root hands
+// the Coordinator.
 type Config struct {
 	lifecycle.Config
 

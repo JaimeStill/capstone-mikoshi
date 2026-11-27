@@ -1,7 +1,7 @@
 // Package data is Mikoshi's database infrastructure as the composition
-// root and, later, the domains see it: the content the admin service
-// administers. It sits at the root because the domains will import it and
-// a root-level package never imports internal/*.
+// root and the domains see it: the content the admin service administers.
+// It sits at the root level, so the domains can import it without importing
+// internal/*.
 //
 // The package's API:
 //
