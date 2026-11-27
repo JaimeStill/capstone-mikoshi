@@ -96,7 +96,7 @@ Two-way: there is no release and no migration, and every change can be reverted 
 
 ## Progress
 
-slices 3/3 committed · standards — · spec — · editor —
+slices 3/3 committed · standards ✓ (3d1c3e4, 76758a3) · spec ✓ (no branch gap; dotted deep links → brief) · editor ✓
 
 ## Decisions
 
@@ -104,7 +104,6 @@ slices 3/3 committed · standards — · spec — · editor —
 - capstone: Bunrei's `client` module is released by tag (`client/v0.1.0` at `api`); Mikoshi imports the published version, never a replace directive.
 - capstone: only `.bunrei` touches the exclusive group (docproc, docinfer, go-messaging); `.mikoshi` stays out of it, so its SSE relay and context tree live in Mikoshi, shaped to graduate.
 - capstone: items join contexts by reference and a context covers its descendants; chunks and embeddings stay keyed by content and carry no context.
-- web-shell: the client lives under `web/` (webappgen `--client-dir web`); the whole client project is the boundary, and its `src/` layer direction is enforced by eslint-plugin-boundaries.
 - signal boundary: a model's token stream travels as direct SSE inside the one request that asked for it; only committed outcomes become go-messaging events (one per committed turn or analysis, with lineage); live views read events, never streams. Rejected: token deltas on go-messaging (a JetStream ack per publish, an outbox row and transaction, retention, lost cancellation).
 - SSE layering: the codec in go-core, the HTTP writer in go-web-sdk, go-ai on go-core's codec, built as `.bunrei` tasks (it holds the exclusive group); context-tools waits on them and is the writer's first consumer. Rejected: a Mikoshi-local relay package, tmaxmax/go-sse, r3labs/sse.
 - context-tools: SSE holds under replicas (request-scoped, no sticky sessions); settle ingress buffering and idle timeout, HTTP/2, and the drain policy for in-flight answers there.
@@ -117,3 +116,4 @@ slices 3/3 committed · standards — · spec — · editor —
   - roadmap/capstone.data-intelligence.mikoshi.toml: web-shell's summary drops the SSE relay; context-tools' opens "Waits on: `.bunrei` `sse-writer` and `go-ai-sse`" and streams its answer through go-web-sdk's writer, one event per committed turn or analysis.
   - roadmap/mikoshi-web-graduation.toml: "the SSE relay into go-web-sdk" becomes the event relay, if evidence 15 picks it.
   - context/data-intelligence.md: the signal boundary paragraph; go-web-sdk's SSE helper is the chat writer on go-core's codec; "a relayable streaming Generate" reworded; `.bunrei`'s exclusive repos and context-tools' blocking point.
+- coordinator · roadmap/web-client-backlog.toml: add webappgen findings from web-shell's inject: when the base is `/`, `mountClient` emits both the `/` not-found branch and the `Mount` branch and a dead `strings` import; inject doesn't add `client.go` to the composition root's `doc.go` layer list; the `# Written by webappgen` header its integration test requires conflicts with comments.md; the browser tier's `ENTRY` and `RENDER_BLOCKING` constants aren't tied to the Go package's `Entry` and `RenderBlocking`; the service's check builds the client twice, and ci.yml's check job builds it again; the root `currency` doesn't run the client's (`mise -C web run currency`), so the client's pins fall behind unreported.

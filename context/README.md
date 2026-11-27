@@ -24,4 +24,4 @@ the capstone's domain, not theirs.
 - **Standing analyses** (planned): the `capstone.data-intelligence.mikoshi` goal, `standards-lab/roadmap/capstone.data-intelligence.mikoshi.toml`.
 - **Lineage** (planned): the `capstone.data-intelligence.mikoshi` goal, `standards-lab/roadmap/capstone.data-intelligence.mikoshi.toml`.
 - **Signal-flow view** (planned): the `capstone.data-intelligence.mikoshi` goal, `standards-lab/roadmap/capstone.data-intelligence.mikoshi.toml`.
-- **The web boundary** (planned): the `capstone.data-intelligence.mikoshi` goal, `standards-lab/roadmap/capstone.data-intelligence.mikoshi.toml`.
+- **The web boundary** (built): the browser client in [`web/`](../web/README.md), which the binary embeds and serves at `/` (`internal/app/client.go`), its `src/` layers held to one import direction by its lint.

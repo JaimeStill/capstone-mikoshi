@@ -19,8 +19,8 @@ mise run serve
 ```
 
 `serve` builds the web client in [`web/`](web/README.md) first; the service embeds the build and
-serves its shell at `/`. The service logs `server ready` on `localhost:8080` (the `local` overlay binds loopback and runs
-debug logging). From a second shell:
+serves its shell at `/`. The service logs `server ready` on `localhost:8080` (the `local` overlay
+binds loopback and runs debug logging). From a second shell:
 
 ```sh
 curl localhost:8080/healthz   # 200 {"status":"ok"}
@@ -35,8 +35,8 @@ Each task wraps a plain command, so the repository works without mise:
 
 | Task | Command | What it does |
 |------|---------|--------------|
-| `mise run check` | `client:build`, `client:check`, then build, vet, `gofmt -l`, `go fix -diff`, `go mod tidy -diff`, `go test -race`, `golangci-lint run`, `lint-context`, `lint-references` | The one read-only check, as CI runs it; the lints run at the project root and, when the project is nested in a git repository, at its top level |
-| `mise run currency` | `bash scripts/currency.sh` | Report requirements, Go version, tools, and action pins behind their latest |
+| `mise run check` | `client:build`, `client:check`, then build, vet, `gofmt -l`, `go fix -diff`, `go mod tidy -diff`, `go test -race`, `golangci-lint run`, `lint-context`, `lint-references` | The check, as CI runs it; it writes nothing but the client's build, `web/dist/`, and the lints run at the project root and, when the project is nested in a git repository, at its top level |
+| `mise run currency` | `bash scripts/currency.sh` | Report requirements, Go version, tools, and action pins behind their latest; the client's report is `mise -C web run currency` |
 | `mise run upgrade` | `go mod edit -go=<current minor> -toolchain=none`, `go get <direct>@latest`, `go mod tidy`, `mise upgrade --bump --local` | Upgrade the go directive, requirements, and tools, rewriting `go.mod` and `mise.toml` |
 | `mise run build` | `go build ./...` | Build the module |
 | `mise run vet` | `go vet -tags integration ./...` | Compile-check and vet, the integration suite included |
