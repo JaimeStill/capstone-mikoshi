@@ -13,7 +13,7 @@
 5. [x] browser-upload
 6. [x] items
 7. [x] event-extensions
-8. [ ] context-events
+8. [x] context-events
 9. [ ] sse-codec
 10. [ ] sse-writer
 11. [ ] go-ai-sse
@@ -81,56 +81,38 @@
 - items: `ingest` writes `source_occurrence` rows keyed by `input_sha256`, which the orphan
   reclaimer deletes by the blob's digest, with their sources and the chunks and embeddings only
   they lead to.
-- context-events (after `items`, before `ingest`) adds go-messaging and the events of contexts'
-  and items' commands, the database reset event included; `items` emits none.
 - client: the web client's feature work holds until the services are mostly complete, so little
   shifts beneath it. `client-design` (after `event-relay`) builds the layout skeleton, with the
   context-tree browser as the side pane whose selection every view reads; `items-client`,
   `chat-client`, `admin-overlay` (an overlay in `sl-settings`' Settings pattern), and
   `signal-flow` follow. New elements live in `web/src/components`, shaped to graduate.
   Rejected: `items-client` right after `items`; admin views as a backlog goal.
-- event-extensions runs before `context-events`, so Mikoshi's events carry `correlationid`,
-  `causationid`, and `layer` from their first release.
-- context-events carries the record's capstone-data-intelligence pending edits on its own branch
-  (that repository is `.showcase`'s root, which a plan can't edit), except the relay's line.
 - context-tools: each committed turn's event carries the model call's timing (`took_ms`) and
   `usage`, which the signal-flow view's go-ai and Torii rows read.
-- event-extensions: Mikoshi sets `layer` once at its composition root, in the recorder's `event.Options.Extensions`.
-- event-extensions: go-core names no extension and derives none; `context-events` and `ingest` set `correlationid` and `causationid` in Mikoshi's own code. Rejected: correlation constants and a causing-event helper in go-core.
+- event-extensions: go-core names no extension and derives none; `ingest` sets `causationid` from the batch in Mikoshi's own code, as the `correlation` package sets `correlationid`. Rejected: correlation constants and a causing-event helper in go-core.
 - event-extensions: go-core's envelope stays standard-library-only. Rejected: CloudEvents sdk-go v2.16.2 (no correlation helper; would replace the envelope every consumer reads).
 - event-extensions: released as go-core `v0.13.0`, carrying main's unreleased commits; `sse-codec` releases `v0.14.0`.
+- context-events: an item's creation is `mikoshi.item.created` whatever its type; `context-tools`' analyses emit it and add no type.
+- context-events: `standing-analyses` resolves a deleted item's contexts itself, since `mikoshi.item.deleted` carries only `{"id"}` and the references it withdraws emit none.
 
 ## Pending edits
 
-- capstone-data-intelligence · context/events.md, "Mikoshi's events": `context-events` names the
-  item-creation types in place of `items`; `.mikoshi`'s Ownership gains `context-events`.
-- capstone-data-intelligence · context/dataset.md: Assumptions, Mikoshi checks filter field
-  names; "What .showcase demo-load adds", records load without their `annotates` link.
-- capstone-data-intelligence · context/upload.md, Ownership: Mikoshi's store keeps chunks in
-  PostgreSQL.
 - coordinator · context/web-client.md (the backlog entry's summary is at its budget): add webappgen findings from web-shell's inject: when the base is `/`, `mountClient` emits both the `/` not-found branch and the `Mount` branch and a dead `strings` import; inject doesn't add `client.go` to the composition root's `doc.go` layer list; the `# Written by webappgen` header its integration test requires conflicts with comments.md; the browser tier's `ENTRY` and `RENDER_BLOCKING` constants aren't tied to the Go package's `Entry` and `RenderBlocking`; the service's check builds the client twice, and ci.yml's check job builds it again; the root `currency` doesn't run the client's (`mise -C web run currency`), so the client's pins fall behind unreported. Add a go-web-sdk-template finding too: the template ships the older 84-line `scripts/currency.sh`, without the Dockerfile scans or HOLDS; sqlate's and go-database's shared script is current; go-web-sdk also runs the older 80-line script.
 - coordinator · retro topic: settle how a document references another repository's document. lint-references can't resolve `context/chunks.md` in capstone-data-intelligence, so Mikoshi's migration headers link it by GitHub URL.
-- coordinator · retro topic: go-database's admin service checks statements in `Verify` only through a `Seeder`, so a service with statements and no seed states can't have `POST /admin/database/schema/verify` check them. Mikoshi checks its statements at startup instead (`data.Database.Verify`, docs/admin.md).
-- capstone-data-intelligence · context/upload.md, context/protocol.md: name `.mikoshi` `upload` where they name `.bunrei` `upload`; the upload releases alone as go-web-sdk v0.19.0, `sse-writer` at a later minor; tusd is no interop peer (it speaks interop versions 3–6 only, draft-16 is 11).
-- capstone-data-intelligence · context/upload.md: add one line that appending nothing from an interrupted append departs deliberately from draft §8.2's SHOULD, and that the in-memory store and `uploadtest` are go-web-sdk's while each service's cross-replica store is its own; context/protocol.md: state that Bunrei's chunk store over its blob storage is Bunrei's own, proven by go-web-sdk's `uploadtest`.
+- coordinator · retro topic: go-database's admin service checks statements in `Verify` only through a `Seeder`, so `POST /admin/database/schema/verify` checks no statements unless the service's seeder does. Mikoshi's `data.Seeder` checks none; Mikoshi checks its statements at startup instead (`data.Database.Verify`, docs/admin.md).
 - architecture · standards/go-elemental/principles/construction-and-execution.md: state the exception for an interface that must stay standard-library-only (go-web-sdk's `upload.Store.Create` takes six positional inputs after ctx, since a struct would make implementers import go-web-sdk).
 - architecture · principles/rolling-currency.md: add a specification revision a library implements (pinned in its source, read from its registry such as datatracker) to the versions the principle covers.
-- capstone-data-intelligence · `context/upload.md`, Ownership: replace the `ReadUpload` and
-  `Transfer` at v0.18.0 line. The handler reads bodies of unknown length itself and builds on
-  v0.19.0's `Transfer`.
-- capstone-data-intelligence · `context/upload.md`, Ownership: add that web-app-sdk's client lives
-  in `./upload.js` (from v0.2.0), and that its draft pin is `DRAFT_REVISION`, which web-app-sdk's
-  currency compares with datatracker's latest revision, as go-web-sdk's does `DraftRevision`.
 - architecture · `principles/rolling-currency.md`: when adding the specification-revision pin
   already pending, name both go-web-sdk's `DraftRevision` and web-app-sdk's `DRAFT_REVISION`.
 - coordinator · `context/web-client.md`: record that web-app-sdk now pins Go for its browser tier,
   the stack's first JavaScript library to do so, for a Go peer used only in tests.
-- capstone-data-intelligence · context/events.md, on `context-events`' branch: `context-tools`
-  names the analysis creation type, not `standing-analyses`; on `event-relay`'s branch, "The
-  browser's transport" says the relay also serves Bunrei's job subjects for Mikoshi's jobs.
+- capstone-data-intelligence · context/events.md, on `event-relay`'s branch: "The browser's
+  transport" says the relay also serves Bunrei's job subjects for Mikoshi's jobs.
 - coordinator · docs/data-intelligence.md, "The presentation": `.showcase` `acceptance` owns the
   scripted recovery; and Bunrei's pending prompt-tuning backlog edit is covered by `.mikoshi`
   `admin-overlay`, so Bunrei's sync drops it.
-- capstone-data-intelligence · context/events.md, "How the extensions are set" and Ownership: `.mikoshi` `event-extensions` (not a `.bunrei` task) adds extensions to `Raise`; carried on `context-events`' branch.
 - coordinator · roadmap/capstone.data-intelligence.mikoshi.toml, `sse-codec`: drop "carries its unreleased main" (v0.13.0 ships it).
 - coordinator · roadmap/capstone.data-intelligence.bunrei.toml, `event-stream`: its wait on `event-extensions` holds only if Bunrei raises through an outbox; it appends via `messaging.Journal`, which sets extensions today.
+- coordinator · roadmap/capstone.data-intelligence.mikoshi.toml, `context-events`: repos gain `go-messaging`; the summary reads go-messaging v0.6.0 (nats/v0.6.0, postgres/v0.5.0) with `Setup.Recorder` in place of v0.4.0.
+- coordinator · same file, `event-relay`: drop "a database reset" from what recreates the stream; a reset arrives as `mikoshi.database.reset` on a kept stream, and only the root's `stack:reset` recreates it.
+- coordinator · backlog: a Mikoshi reset leaves the bucket's objects with no blob rows, which the orphan reclaimer never finds; a candidate fix is an `OnReset` step that clears the bucket.
