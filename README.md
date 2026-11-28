@@ -83,7 +83,7 @@ The suite asserts the baseline: boot, both probes, the drain, and startup failin
 database can't be reached. The client's cases assert the shell at `/` and at a deep link, a
 built asset's caching, a missing asset's 404 problem, and that the probes and `/api/` are not
 answered by the shell. The admin and schema cases assert the migrated schema, pgvector's status,
-the empty seed states, space 1's index serving a nearest-neighbour query, and a wrong-dimension
+the reset to `empty`, space 1's index serving a nearest-neighbour query, and a wrong-dimension
 vector refused in space 1.
 
 ## Database

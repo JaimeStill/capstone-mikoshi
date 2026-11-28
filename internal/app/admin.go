@@ -64,8 +64,10 @@ func (n *Nodes) newSchema(s *graph.Scope) (*Schema, error) {
 
 	return &Schema{
 		Service: admin.New(s.Use(n.Database), sql.DB, migrator, sql.Catalog, admin.Options{
+			Seeder:   data.Seeder{},
 			Registry: sql,
 			Logger:   logger,
+			OnReset:  dbadmin.OnReset(sql.DB, s.Use(n.Runtime).Recorder),
 		}),
 		sql: sql,
 	}, nil

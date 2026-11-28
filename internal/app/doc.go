@@ -107,9 +107,11 @@
 // service over the pool, a sqlate session wrapped in the PostgreSQL
 // dialect, and a migrator over go-messaging's postgres migration set,
 // beneath Mikoshi's own, and data.Migrations, that declares pgvector by
-// name only, with no seeder and no seed state, and the sql node's
-// statements registry as its inventory. The node's value is a [Schema],
-// which Uses every domain node so each has registered its statements
+// name only, with data.Seeder, whose one state, empty, writes nothing,
+// and no startup seed, the sql node's statements registry as its
+// inventory, and admin/database's OnReset over the runtime node's
+// recorder as its reset hook, so a reset commits mikoshi.database.reset.
+// The node's value is a [Schema], which Uses every domain node so each has registered its statements
 // before it is built. Its Start installs the version of pgvector the image
 // offers, failing before any migration when the image offers none, then
 // applies the set, then prepares every registered statement against the
