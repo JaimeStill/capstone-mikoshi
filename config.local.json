@@ -12,5 +12,8 @@
   "storage": {
     "endpoint": "http://127.0.0.1:8336",
     "account": "admin"
+  },
+  "nats": {
+    "url": "nats://127.0.0.1:4228"
   }
 }

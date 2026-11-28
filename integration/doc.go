@@ -15,6 +15,11 @@
 //     whose endpoint [StorageEnv] holds, the gateway every service process
 //     stores its objects in, and [Objects] a started go-storage Store over
 //     such a client, for a domain run without a service process.
+//   - [Broker] makes a started go-messaging NATS broker on the server
+//     whose URL [NATSEnv] holds, the server every service process
+//     connects to, bound to [EventStream] as a consumer, never its owner;
+//     [Subscribe] holds a durable consumer of the stream through such a
+//     broker, and its [Stream] matches the events it receives by subject.
 //   - [Options] holds the database one service process connects to and the
 //     MIKOSHI_* overrides it adds.
 //   - [Start] runs the service on a reserved port, against its own
@@ -26,6 +31,6 @@
 //
 // The harness is untagged, so the unit tier type-checks it on every pull
 // request; the suite files carry the integration tag and need the server
-// [DSNEnv] names and the gateway [StorageEnv] names, the integration stack
-// the integration task starts.
+// [DSNEnv] names, the gateway [StorageEnv] names, and the NATS server
+// [NATSEnv] names, the integration stack the integration task starts.
 package integration

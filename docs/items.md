@@ -112,9 +112,10 @@ making it fresh, and the reclaimer passes it by.
 
 ## Reclamation
 
-go-database's sweeper, the composition root's one reactor
+go-database's sweeper, a reactor of the composition root
 ([`internal/app/reactors.go`](../internal/app/reactors.go)), runs three reclaimers, each owned by
-the domain whose data it removes. Each is scheduled by its block under `sweep`: the least time
+the domain whose data it removes, beside the messaging tables' two retentions
+([Stack](stack.md#messaging)). Each is scheduled by its block under `sweep`: the least time
 between the starts of two of its passes (`interval`) and the most units one pass removes
 (`budget`). The sweeper takes a session advisory lock per reclaimer, `sweep.<name>`, a prefix
 [`data/locks.go`](../data/locks.go) reserves, so two replicas never run one reclaimer at once. The

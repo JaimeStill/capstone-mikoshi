@@ -8,24 +8,32 @@ import (
 	"testing"
 
 	"github.com/standards-lab/go-database/admin"
+	msgpg "github.com/standards-lab/go-messaging/postgres"
 	"github.com/standards-lab/go-web-sdk/webtest"
+	"github.com/standards-lab/sqlate/migrate"
 	"github.com/standards-lab/sqlate/postgres/pgvector"
 
 	"github.com/JaimeStill/capstone-mikoshi/data"
 	"github.com/JaimeStill/capstone-mikoshi/integration"
 )
 
-func TestAdmin_SchemaReportsTheSetCurrentAndPgvector(t *testing.T) {
+func TestAdmin_SchemaReportsTheSetsCurrentAndPgvector(t *testing.T) {
 	s := integration.Start(t, integration.Options{})
 	c := s.Client()
 
 	st := webtest.Decode[admin.Status](t, c.Get(t, "/admin/database/schema"), http.StatusOK)
-	if !st.Ready || len(st.Sets) != 1 {
-		t.Fatalf("schema = %+v, want ready with one set", st)
+	if !st.Ready || len(st.Sets) != 2 {
+		t.Fatalf("schema = %+v, want ready with the messaging set and Mikoshi's", st)
 	}
-	set := st.Sets[0]
-	if head := len(data.Migrations().Migrations); set.Name != data.AppSet || set.Version != head || len(set.Pending) != 0 || set.Dirty {
-		t.Errorf("set = %+v, want %s clean at version %d with nothing pending", set, data.AppSet, head)
+	messagingSet, err := msgpg.Migrations()
+	if err != nil {
+		t.Fatalf("messaging migrations: %v", err)
+	}
+	for i, want := range []migrate.Set{messagingSet, data.Migrations()} {
+		set := st.Sets[i]
+		if head := len(want.Migrations); set.Name != want.Name || set.Version != head || len(set.Pending) != 0 || set.Dirty {
+			t.Errorf("set %d = %+v, want %s clean at version %d with nothing pending", i, set, want.Name, head)
+		}
 	}
 	if len(st.Extensions) != 1 {
 		t.Fatalf("extensions = %+v, want pgvector's status alone", st.Extensions)

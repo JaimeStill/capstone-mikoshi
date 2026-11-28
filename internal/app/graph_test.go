@@ -38,7 +38,7 @@ func TestGraph_ReadinessChecks(t *testing.T) {
 	for _, c := range lifecycle.New(sys, cfg.Config).Checks() {
 		got = append(got, c.Name)
 	}
-	if want := []string{"database", "storage", "schema", "sweeper"}; !slices.Equal(got, want) {
+	if want := []string{"database", "storage", "broker", "schema", "sweeper", "relay"}; !slices.Equal(got, want) {
 		t.Errorf("checks = %v, want %v\nlayers:\n%s", got, want, sys)
 	}
 }
@@ -169,10 +169,30 @@ func TestGraph_SweeperIsAReactorAboveTheSchema(t *testing.T) {
 	}
 }
 
-func TestGraph_SweeperRegistersEachDomainsReclaimer(t *testing.T) {
+func TestGraph_RelayIsAReactorAboveTheSchemaAndTheBroker(t *testing.T) {
+	a := app.New(configtest.Config(t), io.Discard)
+	n := a.Nodes()
+	members, err := a.Graph().Build(n.Reactors)
+	if err != nil {
+		t.Fatalf("Build of %s: %v", n.Reactors.Name(), err)
+	}
+	if !members.Has(n.Relay) {
+		t.Fatalf("%s is not a member of %s\nlayers:\n%s", n.Relay.Name(), n.Reactors.Name(), members)
+	}
+
+	sys := buildAsRun(t, a)
+	for _, below := range []graph.Ref{n.Schema, n.Broker, n.Gate} {
+		if sys.LayerOf(below) >= sys.LayerOf(n.Relay) {
+			t.Errorf("%s in layer %d, %s in layer %d; want the relay above it\nlayers:\n%s",
+				below.Name(), sys.LayerOf(below), n.Relay.Name(), sys.LayerOf(n.Relay), sys)
+		}
+	}
+}
+
+func TestGraph_SweeperRegistersEachReclaimer(t *testing.T) {
 	a := app.New(configtest.Config(t), io.Discard)
 	sweeper := buildAsRun(t, a).Get(a.Nodes().Sweeper)
-	for _, name := range []string{"expired_uploads", "pending_blobs", "orphan_blobs"} {
+	for _, name := range []string{"expired_uploads", "pending_blobs", "orphan_blobs", "outbox_messages", "inbox_messages"} {
 		func() {
 			defer func() {
 				if r := recover(); r != nil {
@@ -184,7 +204,7 @@ func TestGraph_SweeperRegistersEachDomainsReclaimer(t *testing.T) {
 	}
 	defer func() {
 		if recover() == nil {
-			t.Error("Nudge of an unregistered name did not panic; want only the domains' reclaimers registered")
+			t.Error("Nudge of an unregistered name did not panic; want only the domains' reclaimers and the messaging retentions registered")
 		}
 	}()
 	sweeper.Nudge("unregistered")

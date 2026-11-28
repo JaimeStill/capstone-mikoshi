@@ -35,7 +35,7 @@ func (b *syncBuffer) String() string {
 	return b.buf.String()
 }
 
-func TestRun_FailsStartupWithoutDatabase(t *testing.T) {
+func TestRun_FailsStartupWithoutDatabaseOrBroker(t *testing.T) {
 	buf, stderr := &syncBuffer{}, &syncBuffer{}
 	a := app.New(configtest.Config(t), buf)
 	fakeStorage(t, a)
@@ -53,9 +53,9 @@ func TestRun_FailsStartupWithoutDatabase(t *testing.T) {
 	}
 
 	out := buf.String()
-	failure := regexp.MustCompile(`msg="service failed" error="[^"]*startup: database`)
+	failure := regexp.MustCompile(`msg="service failed" error="[^"]*startup: (?:[^"]*\\n)?(database|broker): `)
 	if !failure.MatchString(out) {
-		t.Errorf("log = %q, want a service failure naming the database node's startup", out)
+		t.Errorf("log = %q, want a service failure naming the database's or the broker's startup", out)
 	}
 	if strings.Contains(out, "server ready") {
 		t.Error("log carries a ready record despite the failed startup")

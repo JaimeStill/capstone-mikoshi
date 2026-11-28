@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/standards-lab/go-core/process/processtest"
+	msgpg "github.com/standards-lab/go-messaging/postgres"
 	"github.com/standards-lab/go-storage"
 	"github.com/standards-lab/go-storage/s3"
 	"github.com/standards-lab/go-web-sdk/webtest"
@@ -31,6 +32,11 @@ const databasePrefix = "mikoshi"
 // SeaweedFS S3 gateway every service process stores its objects in; the
 // integration task sets it to the integration stack on SEAWEEDFS_PORT.
 const StorageEnv = "MIKOSHI_INTEGRATION_STORAGE"
+
+// NATSEnv names the environment variable that holds the URL of the NATS
+// server every service process connects its broker to; the integration
+// task sets it to the integration stack on NATS_PORT.
+const NATSEnv = "MIKOSHI_INTEGRATION_NATS"
 
 const (
 	storageAccount = "admin"
@@ -80,13 +86,17 @@ func Database(t testing.TB) *pgtest.Database {
 }
 
 // Migrated creates a throwaway database as [Database] does and applies
-// Mikoshi's migration set to it, declaring pgvector as the service's
-// migrator does, for a test that runs a domain's store against the schema
-// without a service process.
+// the messaging migration set and Mikoshi's above it, declaring pgvector,
+// as the service's migrator does, for a test that runs a domain's store
+// against the schema without a service process.
 func Migrated(t testing.TB) *pgtest.Database {
 	t.Helper()
+	messagingSet, err := msgpg.Migrations()
+	if err != nil {
+		t.Fatalf("messaging migrations: %v", err)
+	}
 	opts := migrate.Options{Extensions: []migrate.Extension{{Name: pgvector.Extension}}}
-	return pgtest.MigratedWith(t, DSNEnv, databasePrefix, opts, data.Migrations())
+	return pgtest.MigratedWith(t, DSNEnv, databasePrefix, opts, messagingSet, data.Migrations())
 }
 
 // Start runs the service with opts and returns once it is live: Launch
@@ -100,9 +110,10 @@ func Start(t testing.TB, opts Options) *Service {
 // without waiting, so a test can start several processes at once; Ready
 // waits for one. The service connects to opts.Database, or to a new
 // throwaway database when it is nil, through the MIKOSHI_DATABASE_*
-// overrides, and to the gateway [StorageEnv] names through the
+// overrides, to the gateway [StorageEnv] names through the
 // MIKOSHI_STORAGE_* overrides, in the configured bucket unless opts.Env
-// names another.
+// names another, and to the NATS server [NATSEnv] names through
+// MIKOSHI_NATS_URL, owning the configured stream.
 func Launch(t testing.TB, opts Options) *Service {
 	t.Helper()
 	db := opts.Database
@@ -111,7 +122,7 @@ func Launch(t testing.TB, opts Options) *Service {
 	}
 	addr := net.JoinHostPort("127.0.0.1", strconv.Itoa(processtest.FreePort(t)))
 	s := &Service{addr: addr, client: webtest.NewClient("http://" + addr)}
-	s.Process = processtest.Launch(t, environment(t, opts, addr, db.DSN, storageEndpoint(t))...)
+	s.Process = processtest.Launch(t, environment(t, opts, addr, db.DSN, storageEndpoint(t), natsURL(t))...)
 	return s
 }
 
@@ -132,6 +143,15 @@ func storageEndpoint(t testing.TB) string {
 		t.Fatalf("%s is not set; run the suite through mise run integration", StorageEnv)
 	}
 	return endpoint
+}
+
+func natsURL(t testing.TB) string {
+	t.Helper()
+	url := os.Getenv(NATSEnv)
+	if url == "" {
+		t.Fatalf("%s is not set; run the suite through mise run integration", NATSEnv)
+	}
+	return url
 }
 
 // Bucket returns a client of the bucket name on the gateway [StorageEnv]
@@ -173,7 +193,7 @@ func Objects(t testing.TB, name string) *storage.Store {
 	return store
 }
 
-func environment(t testing.TB, opts Options, addr, dsn, storageEndpoint string) []string {
+func environment(t testing.TB, opts Options, addr, dsn, storageEndpoint, natsURL string) []string {
 	t.Helper()
 	host, port, _ := net.SplitHostPort(addr)
 	u, err := url.Parse(dsn)
@@ -199,6 +219,7 @@ func environment(t testing.TB, opts Options, addr, dsn, storageEndpoint string) 
 		"MIKOSHI_STORAGE_ENDPOINT=" + storageEndpoint,
 		"MIKOSHI_STORAGE_ACCOUNT=" + storageAccount,
 		"MIKOSHI_STORAGE_KEY=" + storageKey,
+		"MIKOSHI_NATS_URL=" + natsURL,
 	}
 	return append(env, opts.Env...)
 }
