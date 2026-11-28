@@ -52,14 +52,13 @@ func (s *Service) Children(ctx context.Context, id string, q web.Query) ([]Conte
 	return s.store.listChildren(ctx, id, q)
 }
 
-// Create creates a context under the stated parent, with an id the
-// service mints, and returns it as the read presents it, emitting
-// ContextCreated in its transaction. It takes the
-// tree lock before it reads the parent: a missing parent is
-// ErrParentNotFound, a query parent ErrQueryParent, and a name a sibling
-// holds ErrNameTaken. A query context's filter is checked against the
-// service's field contract before the store, a condition that does not
-// fit it ErrValidation naming the condition's index.
+// Create creates a context under the stated parent, with an id the service
+// mints, and returns it as the read presents it, emitting ContextCreated in
+// its transaction. It takes the tree lock before it reads the parent: a
+// missing parent is ErrParentNotFound, a query parent ErrQueryParent, and a
+// name a sibling holds ErrNameTaken. A query context's filter is checked
+// against the service's field contract before the store, a condition that
+// does not fit it ErrValidation naming the condition's index.
 func (s *Service) Create(ctx context.Context, c CreateContext) (Context, error) {
 	if err := c.Validate(); err != nil {
 		return Context{}, err
@@ -99,11 +98,11 @@ func (s *Service) Rename(ctx context.Context, id string, r RenameContext) (Conte
 // subtree moves with it. In one transaction it takes the tree lock, reads
 // the context and the new parent, and walks the new parent's ancestors
 // before it writes, then emits ContextMoved; a move to the parent and the
-// name the context already has returns it and emits nothing. A malformed id or command is ErrValidation, the root
-// ErrRootFixed, an unknown context sql.ErrNoRows, a missing parent
-// ErrParentNotFound, a query parent ErrQueryParent, a parent that is the
-// context or one of its descendants ErrCycle, and a name a sibling under
-// the new parent holds ErrNameTaken.
+// name the context already has returns it and emits nothing. A malformed id
+// or command is ErrValidation, the root ErrRootFixed, an unknown context
+// sql.ErrNoRows, a missing parent ErrParentNotFound, a query parent
+// ErrQueryParent, a parent that is the context or one of its descendants
+// ErrCycle, and a name a sibling under the new parent holds ErrNameTaken.
 func (s *Service) Move(ctx context.Context, id string, m MoveContext) (Context, error) {
 	parsed, err := uuid.Parse(id)
 	if err != nil {

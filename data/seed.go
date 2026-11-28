@@ -14,8 +14,7 @@ const StateEmpty = "empty"
 // [StateEmpty]. Its Verify checks nothing, since the schema node prepares
 // every registered statement at startup ([Database.Verify]), and its Seed
 // writes nothing, so a reset to StateEmpty leaves the schema it reapplied
-// empty. The composition root leaves the admin service's startup seed
-// unset, so startup seeds no state.
+// empty.
 type Seeder struct{}
 
 // Verify checks nothing.

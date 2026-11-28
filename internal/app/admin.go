@@ -75,7 +75,6 @@ func (n *Nodes) newSchema(s *graph.Scope) (*Schema, error) {
 
 type verifier func(ctx context.Context, sess sqlate.Session) error
 
-// Verify runs v against the schema sess reaches.
 func (v verifier) Verify(ctx context.Context, sess sqlate.Session) error { return v(ctx, sess) }
 
 func mountAdmin(s *graph.Scope, n *Nodes) *web.Group {

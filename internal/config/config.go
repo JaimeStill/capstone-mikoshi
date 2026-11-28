@@ -61,9 +61,9 @@ func (c *Config) Merge(src *Config) {
 // reads <PREFIX>_SHUTDOWN_TIMEOUT, and rejects a non-positive timeout, on
 // which the lifecycle coordinator panics. The nats block's error returns
 // unlabelled too, since go-messaging's provider labels its own ("nats:
-// config: ..."). An empty prefix composes empty
-// variable names, which read as no override, so it disables every
-// environment override; tests use this hermetic form.
+// config: ..."). An empty prefix composes empty variable names, which read
+// as no override, so it disables every environment override; tests use this
+// hermetic form.
 func (c *Config) Finalize(envPrefix string) error {
 	if err := c.Config.Finalize(envPrefix); err != nil {
 		return err
