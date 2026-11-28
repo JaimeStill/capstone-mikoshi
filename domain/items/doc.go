@@ -59,11 +59,26 @@
 // one deleted after it takes the reference with it, by the cascade from
 // the context.
 //
+// Each command that changes an item or a reference emits one event
+// through the recorder the service is built with, in the transaction that
+// makes the change: a create emits [ItemCreated] about the item, a delete
+// [ItemDeleted] about the item, and a placing or a withdrawing
+// [ContextItemAdded] or [ContextItemRemoved] about the context. A command
+// that is refused, fails, or changes nothing emits none: a completion
+// that returns an existing item, a reference already in place or not in
+// place, and the references a delete removes with its item. The
+// reclaimers emit nothing.
+//
 // The package's API:
 //
-//   - [Service], built by [New]: the reads, the covered read, the file
-//     create, the record create, the delete, and the reference's placing
-//     and withdrawing.
+//   - [Service], built by [New] over a [Recorder]: the reads, the covered
+//     read, the file create, the record create, the delete, and the
+//     reference's placing and withdrawing.
+//   - [Recorder]: the recorder the layer emits its events through.
+//   - [ItemCreated] and [ItemDeleted], with [ItemData] and
+//     [ItemDeletedData], each about the item's id, and
+//     [ContextItemAdded] and [ContextItemRemoved], with [ReferenceData],
+//     each about the context's id: the events the commands emit.
 //   - [PendingReclaimer], from [Service.PendingReclaimer]: the pending
 //     blobs' go-database sweep.Reclaimer.
 //   - [OrphanReclaimer], from [Service.OrphanReclaimer]: the orphaned

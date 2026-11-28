@@ -12,6 +12,9 @@ import (
 	"github.com/standards-lab/go-core/process/processtest"
 	"github.com/standards-lab/go-messaging"
 	"github.com/standards-lab/go-messaging/nats"
+	"github.com/standards-lab/go-messaging/outbox"
+	msgpg "github.com/standards-lab/go-messaging/postgres"
+	"github.com/standards-lab/sqlate"
 )
 
 const (
@@ -22,6 +25,19 @@ const (
 	// [EventStream] captures under.
 	EventPrefix = "mikoshi"
 )
+
+// Recorder returns a recorder over go-messaging's Postgres outbox that
+// stamps what the service's runtime stamps: the source mikoshi and the
+// layer extension mikoshi. A domain service a test builds over it writes
+// its events to the outbox of the database it runs over.
+func Recorder(t testing.TB) *event.Recorder[*sqlate.Tx] {
+	t.Helper()
+	ob, err := outbox.New(msgpg.Outbox())
+	if err != nil {
+		t.Fatalf("outbox: %v", err)
+	}
+	return event.NewRecorder(ob.Sink(), "mikoshi", event.Options{Extensions: map[string]string{"layer": "mikoshi"}})
+}
 
 // Broker returns a started go-messaging NATS broker on the server
 // [NATSEnv] names, bound to [EventStream] as a consumer, never its owner,
@@ -134,6 +150,24 @@ func (s *Stream) Await(t testing.TB, subject string) []event.Event {
 		got = s.Received()
 		for _, e := range got {
 			if e.Subject == subject {
+				return true
+			}
+		}
+		return false
+	})
+	return got
+}
+
+// AwaitType waits until the stream has received an event of type typ
+// whose subject is subject, and returns the first such event, failing the
+// test if none arrives within the failsafe.
+func (s *Stream) AwaitType(t testing.TB, typ, subject string) event.Event {
+	t.Helper()
+	var got event.Event
+	processtest.WaitFor(t, typ+" about "+subject, func() bool {
+		for _, e := range s.Received() {
+			if e.Type == typ && e.Subject == subject {
+				got = e
 				return true
 			}
 		}

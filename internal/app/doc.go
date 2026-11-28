@@ -144,7 +144,8 @@
 // checked against, and the runtime's Recorder, which its commands emit
 // their events through, and mounted at /api/contexts; uploads, the resumable
 // uploads in progress, built over the sql node; and items, built over the
-// sql node, the storage node, and the contexts node and mounted at
+// sql node, the storage node, the contexts node, and the runtime's
+// Recorder, which its commands emit their events through, and mounted at
 // /api/items, each read with the read limits allowing a cursor. The items
 // layer's reference group mounts at /api/contexts beside the contexts
 // layer's group, its routes under /api/contexts/{id}/items, the covered

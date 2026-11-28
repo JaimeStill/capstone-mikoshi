@@ -33,11 +33,12 @@ type Service struct {
 }
 
 // New constructs the service over the database the domains share, the
-// object store its blobs are kept in, and the contexts service it resolves
-// a reference's context through. Construction compiles and binds the
-// statements and performs no I/O.
-func New(db *data.Database, objects *storage.Store, tree *contexts.Service) *Service {
-	return &Service{store: newStore(db, objects), tree: tree}
+// object store its blobs are kept in, the contexts service it resolves a
+// reference's context through, and events, the recorder its commands emit
+// their events through. Construction compiles and binds the statements
+// and performs no I/O.
+func New(db *data.Database, objects *storage.Store, tree *contexts.Service, events *Recorder) *Service {
+	return &Service{store: newStore(db, objects, events), tree: tree}
 }
 
 // FilterFields returns the field contract a query context's filter is
@@ -135,6 +136,8 @@ func (s *Service) matching(ctx context.Context, n contexts.Node) ([]string, erro
 // already. The blob row is written pending, then the object, then the row
 // is marked available in the transaction that creates the item; when the
 // row is available, the item is created in the transaction that locks it.
+// The transaction that creates the item emits ItemCreated; a call that
+// returns an existing item emits nothing.
 // Content that is not c.Size bytes or does not match c.SHA256 is an error,
 // and a malformed command is ErrValidation.
 func (s *Service) CreateFile(ctx context.Context, c CreateFile, content io.Reader) (Item, error) {
@@ -178,8 +181,9 @@ func (s *Service) CreateFile(ctx context.Context, c CreateFile, content io.Reade
 // byte for byte as an application/json blob, by the protocol and at the
 // key a file's content is, and routed by docproc's route package as a
 // file's is. A record is idempotent on nothing: two calls create two
-// items, over one blob when their content is the same. An empty name or
-// content that is not valid JSON is ErrValidation.
+// items, over one blob when their content is the same. The transaction
+// that creates the item emits ItemCreated. An empty name or content that
+// is not valid JSON is ErrValidation.
 func (s *Service) CreateRecord(ctx context.Context, c CreateRecord, content []byte) (Item, error) {
 	if err := c.Validate(); err != nil {
 		return Item{}, err
@@ -207,7 +211,8 @@ func (s *Service) CreateRecord(ctx context.Context, c CreateRecord, content []by
 // Delete deletes the item with the given id and its references, in one
 // transaction that first moves the update time of the blob it names to
 // now, so content no item names is stale only once its last item's
-// deletion is older than the orphaned blobs' stale age. The blob and its
+// deletion is older than the orphaned blobs' stale age, and emits
+// ItemDeleted; the references it removes emit nothing. The blob and its
 // object stay; the [OrphanReclaimer] removes them. An unknown item is
 // sql.ErrNoRows, and a malformed id ErrValidation.
 func (s *Service) Delete(ctx context.Context, id string) error {
@@ -218,8 +223,9 @@ func (s *Service) Delete(ctx context.Context, id string) error {
 }
 
 // Place places the item with the given id in the explicit context with the
-// given id, by reference. A reference already in place is left as it is,
-// so a repeated call changes nothing. A malformed id is ErrValidation, an
+// given id, by reference, in a transaction that emits ContextItemAdded. A
+// reference already in place is left as it is, so a repeated call changes
+// nothing and emits nothing. A malformed id is ErrValidation, an
 // unknown context ErrContextNotFound, a query context ErrQueryContext, and
 // an unknown item ErrItemNotFound. A context deleted between its read and
 // the placing is ErrContextNotFound, and a context deleted after the
@@ -232,8 +238,9 @@ func (s *Service) Place(ctx context.Context, contextID, itemID string) error {
 }
 
 // Withdraw removes the reference of the item with the given id from the
-// explicit context with the given id. A reference not in place is left
-// absent, so a repeated call changes nothing. A malformed id is
+// explicit context with the given id, in a transaction that emits
+// ContextItemRemoved. A reference not in place is left absent, so a
+// repeated call changes nothing and emits nothing. A malformed id is
 // ErrValidation, an unknown context ErrContextNotFound, a query context
 // ErrQueryContext, and an unknown item ErrItemNotFound.
 func (s *Service) Withdraw(ctx context.Context, contextID, itemID string) error {

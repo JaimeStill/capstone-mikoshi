@@ -76,7 +76,8 @@ take `page` and `size` or the `cursor` the previous page returned, and refuse `s
 `PUT /api/contexts/{id}/items/{item}` places an item in an explicit context, and `DELETE` on the
 same path withdraws it. Both answer 204 whether or not the reference was in place before. A
 query context's contents are what its filter selects, so a reference to one is refused with a
-409. A reference reads its context before it writes and takes no tree lock: a context's kind
+409. A reference reads its context before it writes, writes in a transaction of its own so its
+event commits with it ([Events](#events)), and takes no tree lock: a context's kind
 never changes, a context deleted between the read and the write fails the reference's foreign
 key, and one deleted after takes its references with it by cascade.
 
@@ -139,6 +140,31 @@ remaining chunk's text names.
 
 Each field has an override, `MIKOSHI_SWEEP_<RECLAIMER>_<FIELD>`, such as
 `MIKOSHI_SWEEP_ORPHAN_BLOBS_STALE_AGE`, and each value must be positive.
+
+## Events
+
+Each command that changes an item or a reference emits one event, written to the outbox in the
+transaction that makes the change ([`domain/items/messaging.go`](../domain/items/messaging.go)),
+and published to the `MIKOSHI` stream once that transaction commits. A command that is refused,
+fails, or changes nothing emits nothing: a completion that returns an item an earlier or
+overlapping completion created, a placing of a reference already in place, and a withdrawing of
+one not in place answer as before and publish no event. Reads, the covered read, and the
+reclaimers emit nothing; a reclaimer removing an orphaned blob is not an item command.
+
+| Type | Subject | Command | Data |
+|------|---------|---------|------|
+| `mikoshi.item.created` | The item's id | A file or a record create | `{"id", "type", "name", "media_type", "sha256", "size", "route", "kind", "duration"}` |
+| `mikoshi.item.deleted` | The item's id | Delete | `{"id"}` |
+| `mikoshi.context.item.added` | The context's id | Place a reference | `{"context_id", "item_id"}` |
+| `mikoshi.context.item.removed` | The context's id | Withdraw a reference | `{"context_id", "item_id"}` |
+
+A created item's data is the item as the read presents it, without `created_at`, its `type`
+`file` or `record`. A file's event is written by the transaction that creates the item: the
+first when its blob is already `available`, the second, which marks the blob, otherwise
+([The blob protocol](#the-blob-protocol)). A delete emits one event, on the item; the references
+it removes with the item emit none. Every event carries `source` `mikoshi`, the `layer` extension
+`mikoshi`, and the `correlationid` extension: the request's id, the `X-Request-Id` its response
+carries, or a fresh UUIDv7 when the command runs outside a request. It carries no `causationid`.
 
 ## The HTTP API
 

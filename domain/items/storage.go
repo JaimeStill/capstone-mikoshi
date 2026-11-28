@@ -7,6 +7,7 @@ import (
 	"io"
 	"time"
 
+	"github.com/standards-lab/go-core/event"
 	"github.com/standards-lab/go-storage"
 	"github.com/standards-lab/sqlate"
 	"github.com/standards-lab/sqlate/query"
@@ -52,7 +53,7 @@ func (s *store) createOver(ctx context.Context, n newItem, content io.ReaderAt) 
 
 func (s *store) attempt(ctx context.Context, n newItem, content io.ReaderAt) (Item, error) {
 	args := query.Args{"sha256": n.SHA256, "size": n.Size}
-	c, err := s.db.Transact(ctx, func(tx *sqlate.Tx) (claim, error) {
+	c, err := s.db.Transact(ctx, s.events.Emit(ctx, func(tx *sqlate.Tx, q *event.Queue) (claim, error) {
 		b, _, err := s.touchBlob.One(ctx, tx, args)
 		switch {
 		case errors.Is(err, sql.ErrNoRows):
@@ -65,9 +66,9 @@ func (s *store) attempt(ctx context.Context, n newItem, content io.ReaderAt) (It
 		case b.Status != blobAvailable:
 			return claim{write: true}, nil
 		}
-		item, err := s.insert(ctx, tx, n)
+		item, err := s.insert(ctx, tx, q, n)
 		return claim{item: item}, err
-	}, nil)
+	}), nil)
 	if err != nil {
 		return s.settle(ctx, n, err)
 	}
@@ -80,7 +81,7 @@ func (s *store) attempt(ctx context.Context, n newItem, content io.ReaderAt) (It
 		return Item{}, err
 	}
 
-	item, err := s.db.Transact(ctx, func(tx *sqlate.Tx) (Item, error) {
+	item, err := s.db.Transact(ctx, s.events.Emit(ctx, func(tx *sqlate.Tx, q *event.Queue) (Item, error) {
 		marked, err := s.markBlob.Exec(ctx, tx, args)
 		if err != nil {
 			return Item{}, err
@@ -88,8 +89,8 @@ func (s *store) attempt(ctx context.Context, n newItem, content io.ReaderAt) (It
 		if marked == 0 {
 			return Item{}, errBlobRaced
 		}
-		return s.insert(ctx, tx, n)
-	}, nil)
+		return s.insert(ctx, tx, q, n)
+	}), nil)
 	if err != nil {
 		return s.settle(ctx, n, err)
 	}

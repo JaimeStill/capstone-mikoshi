@@ -54,7 +54,7 @@ func post(t *testing.T, h http.Handler, disposition string, body []byte) *httpte
 }
 
 func TestRoutes_PostRecordCreatesARecordItem(t *testing.T) {
-	h, f := routes(t, none(), none(), affected(1), affected(1), recordRow(record))
+	h, f := routes(t, none(), none(), affected(1), affected(1), recordRow(record), eventWritten())
 	res := post(t, h, `attachment; filename="notes.json"`, record)
 	if res.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want 201 (body %s)", res.Code, res.Body)
@@ -78,7 +78,7 @@ func TestRoutes_PostRecordCreatesARecordItem(t *testing.T) {
 }
 
 func TestRoutes_PostRecordReadsAnEncodedFileName(t *testing.T) {
-	h, f := routes(t, none(), none(), affected(1), affected(1), recordRow(record))
+	h, f := routes(t, none(), none(), affected(1), affected(1), recordRow(record), eventWritten())
 	if res := post(t, h, `attachment; filename*=UTF-8''%E7%A5%9E%E8%BC%BF.json`, record); res.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want 201 (body %s)", res.Code, res.Body)
 	}
@@ -124,9 +124,9 @@ func TestReferenceRoutes_PlaceAndWithdrawAnswerNoContent(t *testing.T) {
 		method    string
 		responses []sqltest.Response
 	}{
-		{"a placing", http.MethodPut, []sqltest.Response{contextRow(contexts.KindExplicit), affected(1)}},
+		{"a placing", http.MethodPut, []sqltest.Response{contextRow(contexts.KindExplicit), affected(1), eventWritten()}},
 		{"a repeated placing", http.MethodPut, []sqltest.Response{contextRow(contexts.KindExplicit), violation("pk_context_item")}},
-		{"a withdrawing", http.MethodDelete, []sqltest.Response{contextRow(contexts.KindExplicit), affected(1)}},
+		{"a withdrawing", http.MethodDelete, []sqltest.Response{contextRow(contexts.KindExplicit), affected(1), eventWritten()}},
 		{"a withdrawing of an absent reference", http.MethodDelete, []sqltest.Response{contextRow(contexts.KindExplicit), affected(0), itemRow(pdf, "document", "pdf")}},
 	}
 	for _, c := range cases {
@@ -196,11 +196,11 @@ func TestReferenceRoutes_Refusals(t *testing.T) {
 }
 
 func TestRoutes_DeleteAnswersNoContent(t *testing.T) {
-	h, f := routes(t, affected(1), affected(1), affected(1))
+	h, f := routes(t, affected(1), affected(1), affected(1), eventWritten())
 	if res := serve(h, http.MethodDelete, "/items/"+itemID); res.Code != http.StatusNoContent || res.Body.Len() != 0 {
 		t.Errorf("status = %d (body %s), want 204 with no body", res.Code, res.Body)
 	}
-	sameOps(t, f.rec, begin, x, x, x, commit)
+	sameOps(t, f.rec, begin, x, x, x, x, commit)
 }
 
 func TestRoutes_DeleteRefusals(t *testing.T) {

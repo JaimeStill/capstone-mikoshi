@@ -32,7 +32,7 @@ func (n *Nodes) newUploads(s *graph.Scope) (*uploads.Service, error) {
 }
 
 func (n *Nodes) newItems(s *graph.Scope) (*items.Service, error) {
-	return items.New(s.Use(n.SQL), s.Use(n.Storage), s.Use(n.Contexts)), nil
+	return items.New(s.Use(n.SQL), s.Use(n.Storage), s.Use(n.Contexts), s.Use(n.Runtime).Recorder), nil
 }
 
 func mountAPI(s *graph.Scope, n *Nodes) *web.Group {
