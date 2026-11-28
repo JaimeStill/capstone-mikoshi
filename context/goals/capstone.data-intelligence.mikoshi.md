@@ -15,7 +15,7 @@
 7. [x] event-extensions
 8. [x] context-events
 9. [x] sse-codec
-10. [ ] sse-writer
+10. [x] sse-writer
 11. [ ] go-ai-sse
 12. [ ] hybrid-search
 13. [ ] context-tools
@@ -34,113 +34,119 @@
 26. [ ] image
 27. [ ] foundation-notes
 
-## Task brief · sse-codec
+## Task brief · sse-writer
 
 **Problem**
 
-go-web-sdk has to write `text/event-stream`, and go-ai reads it through a decoder of its own that
-no other module can import. Under the SSE layering Decision, go-core owns the codec: a stream read
-and written to the WHATWG HTML standard's rules, with no HTTP or model concerns. That lets
-`sse-writer` write through it and `go-ai-sse` read through it, both before `context-tools` needs
-the writer.
+`context-tools` streams a model's answer as SSE inside the request that asked for it, and
+`event-relay` serves Mikoshi's events to the browser the same way, but go-web-sdk has no writer for
+`text/event-stream`. Under the SSE layering Decision, the writer belongs to go-web-sdk and sits on
+go-core `v0.14.0`'s `sse` codec. A stream runs longer than the server's `WriteTimeout`. Because
+`http.Server.Shutdown` waits for a stream that is still running, the stream can also outlast the
+drain's budget. Unless the writer ends the stream on the run context, the drain fails and
+`Service.Run` exits 1.
 
 **Behaviors**
 
-1. A root-level `sse` package uses only the standard library and imports nothing from HTTP or from
-   go-core's other packages. Its package doc says why it belongs in go-core: the pattern is
-   process-level and universal, since clients read event streams and servers write them, and it
-   serves neither alone.
-2. An `Event` has a `Type` string, a `Data []byte`, and an `ID` string. Its events are neutral:
-   nothing maps them to or from CloudEvents.
-3. `NewDecoder(io.Reader)` returns a `Decoder`. Its `Next() (Event, error)` reads until a blank
-   line ends a block that holds a data field, then returns that event. At the stream's end it
-   returns `io.EOF`, and it returns a read error unchanged. `Next` is the only way to read; there
-   is no iterator form.
-4. The reader follows WHATWG's line rules:
-   - One leading BOM is stripped, and no other.
-   - A line ends at CR, LF, or CRLF, including a CRLF split across two reads. A trailing CR is
-     remembered, never read past, so an event dispatches as soon as its bytes arrive.
-   - A line with no colon is a field name with an empty value.
-   - One space after the colon is removed.
-   - A line or event that the stream's end cuts off is discarded.
-5. The reader follows WHATWG's field rules:
-   - The last `event` field names the type, and the type resets after each block. An empty `Type`
-     means the stream named none.
-   - Data values are joined with LF. A `data` field with an empty value still dispatches.
-   - A block with no data dispatches nothing.
-   - An `id` holding NUL is ignored. The last id carries to every later event until an empty id
-     clears it.
-   - Comments and unknown fields are skipped. A comment is never returned.
-6. The reader decodes UTF-8 with replacement, one U+FFFD for each maximal subpart, as the Encoding
-   Standard does. Every `Type`, `Data`, and `ID` is valid UTF-8. Each event's `Data` is its own
-   slice, never shared with a later read.
-7. `Decoder.Retry() (time.Duration, bool)` reports the reconnection time the stream's last valid
-   `retry` field set, in milliseconds. A `retry` value is valid when it is one or more ASCII digits
-   that fit in a `time.Duration`; any other value is ignored. Before a valid `retry` arrives,
-   `Retry` reports false. A `retry` field dispatches no event, and an event carries no retry.
-8. The reader holds only the line and event being built, with no size limit. Its doc says the
-   caller bounds an untrusted stream through its context or transport.
-9. `NewEncoder(io.Writer)` returns an `Encoder` that sends each event, comment, or retry to its
-   writer in exactly one `Write` call, so an HTTP writer can flush once per event. A write error is
-   returned unchanged.
-10. `Encoder.Encode(Event)` writes the following, ending each line with LF:
-    - an `event` line when `Type` is set, and an `id` line when `ID` is set;
-    - one `data` line for each line of `Data`, split at CR, LF, and CRLF, with an empty `Data`
-      written as one empty `data` line;
-    - a blank line to end the event.
-
-    Decoding `Encode`'s output returns the same event, except that CR and CRLF in `Data` come back
-    as LF.
-11. `Encode` returns an error and writes nothing when `Type` or `ID` contains CR or LF, or `ID`
-    contains NUL.
-12. `Encoder.Comment(string)` writes the text as one comment line for each of its lines, split at
-    CR, LF, and CRLF. The reader skips all of them, and no event dispatches.
-13. `Encoder.Retry(time.Duration)` writes a `retry` line in whole milliseconds, followed by a blank
-    line. A decoder reading it reports that duration from `Retry` and dispatches no event. A
-    negative duration is an error and writes nothing.
-14. The README's package list, the context's capability map, and the changelog's Unreleased section
-    describe `sse`. The changelog records the addition as non-breaking.
+1. `Server` keeps the context its `Start` receives, which is the Coordinator's run context. It
+   carries that context as a value in every request's context through `http.Server.BaseContext`.
+   Request contexts aren't cancelled along with it, so an ordinary request still drains to
+   completion. `Start`'s doc says so.
+2. `Config.EventStream(EventStreamOptions)` returns an `EventStream`. It is built once at wiring
+   and is safe for concurrent use.
+   - It panics on an unfinalized `Config` and on a negative `EventStreamOptions.KeepAlive`.
+   - A zero `KeepAlive` means 15 seconds.
+   - Every method of a zero `EventStream` panics, as `Transfer`'s methods do.
+3. `EventStream.Serve(w, r, fn)` sets `Content-Type: text/event-stream` and
+   `Cache-Control: no-store`, writes the 200 status, and flushes the headers before it calls `fn`.
+   If the writer can't flush, `Serve` returns an error and never calls `fn`.
+4. `Serve` calls `fn` with a context and a sender. The context ends when either the request's
+   context or the run context from behavior 1 ends. When the request carries no run context, as
+   under a plain `httptest` server, the context ends with the request alone.
+5. The sender writes through go-core's `sse.Encoder` and flushes after each write.
+   - `Send(sse.Event)` writes one event.
+   - `Retry(time.Duration)` writes a `retry` field.
+   - If the `Encoder` rejects an event or a duration, the sender returns its error, writes
+     nothing, and leaves the stream open.
+   - A write or flush error is returned.
+6. Before each write, the writer sets the connection's write deadline to now plus the `Config`'s
+   `WriteTimeout`, through `http.ResponseController`. Each write means an event, a retry, a
+   keepalive, or the headers.
+   - If the `Config` disables `WriteTimeout` with an explicit zero, the deadline is left alone.
+   - `http.ErrNotSupported` is tolerated.
+   - A stream can therefore last past the `WriteTimeout`, while a client that stalls on one write
+     fails within it.
+7. While `fn` runs, the writer writes a keepalive comment through `Encoder.Comment` whenever
+   `KeepAlive` passes with nothing written. Each send restarts the interval. A quiet stream gets
+   comments at the interval, a busy one gets none, and no event reaches a client because of them.
+8. Sends and keepalives never interleave. Each write reaches the client whole, and the race
+   detector passes with sends from `fn` running against the ticker.
+9. Once the context from behavior 4 ends, or a keepalive write fails, every later `Send` and
+   `Retry` returns an error and writes nothing, which ends a producer's loop. The keepalive
+   stops before `Serve` returns.
+10. When `fn` returns, `Serve` returns its error. The writer writes nothing at the end of a stream:
+    no closing event, comment, or retry.
+11. When the run context of a `Service` whose handler streams through `Serve` ends, the service
+    drains. The stream's context ends, `fn` returns, the server shuts down within
+    `ShutdownTimeout`, and `Service.Run` returns `process.ExitOK`.
+12. `EventStream`'s doc says a stream route must not sit under `middleware.Timeout`, whose duration
+    would end the stream. `Transfer`'s doc gives the same warning for a transfer.
+13. The docs describe `EventStream` and the run context in the request. This covers the README,
+    `doc.go`'s inventory, the context's capability map, the server and requests-and-responses
+    docs pages, and `STANDARDS.md`'s timeouts and lifecycle lines. The changelog's Unreleased
+    section adds `EventStream`. It marks the go-core `v0.14.0` requirement as **Breaking**, because
+    that version pulls in `v0.13.0`'s `EventKind.Raise` change, which the SDK doesn't call.
 
 **Test seams**
 
-- The `sse` package's exported API: `NewDecoder`, `Decoder.Next`, `Decoder.Retry`, `NewEncoder`,
-  `Encoder.Encode`, `Encoder.Comment`, and `Encoder.Retry`. The tests are black-box.
-- The decoder runs over a whole reader, a reader that returns one byte at a time, a reader that
-  splits every CRLF across two reads, a reader that returns bytes as a test releases them, and a
-  reader that fails.
-- The encoder writes to a writer that records each `Write` call, and to a writer that fails.
+- `Config.EventStream`, `EventStream.Serve`, and the sender, tested black-box. Tests run them over
+  an `httptest` server whose client reads the body with go-core's `sse.Decoder`, and over a
+  recorder that doesn't support deadlines.
+- `Server` started with a context the test cancels, for behaviors 1 and 4.
+- `Service.Run` with a streaming handler and a cancelled context, for behavior 11.
+- A short `KeepAlive` and a short `WriteTimeout` keep the timing tests fast.
 
 **Slices**
 
-1. **The reader.** go-ai's decoder and its table tests are ported to `sse`, with `Data` as
-   `[]byte`. The slice adds the `retry` cases, along with the package doc, the admission
-   rationale, the README, the capability map, and the Unreleased changelog entry (behaviors 1–8,
-   and 14 for the reader). Demo: the table passes over whole, one-byte, and split reads.
-2. **The writer.** `Encoder`, with its rejections and its round trip through `Decoder`, plus its
-   doc, README, and changelog lines (behaviors 9–13, and 14 for the writer). Demo: an encoded
-   sequence of events, comments, and a retry decodes back to the same events and the same
-   `Retry`, with one `Write` per call.
+1. **Upgrade.** Both modules require go-core `v0.14.0`, `middleware/rate-limit` requires
+   go-web-sdk `v0.19.0`, and each module is tidied. The base changelog marks the go-core bump as
+   Breaking, and rate-limit's Unreleased section records its two bumps. The slice is done when
+   `mise run currency` exits 0 and `mise run check` passes.
+2. **The run context in the request.** `Server` carries its run context into every request's
+   context, with its doc and the server docs page (behavior 1). Demo: a request served after the
+   test cancels `Start`'s context sees that context ended while its own is still live.
+3. **The stream.** `Config.EventStream`, `Serve`, the sender, the per-write deadline, the ending on
+   either context, and the drain test (behaviors 2–6 and 9–12), with their doc, README,
+   capability map, docs page, and changelog lines. Demo:
+   - A streamed sequence decodes back with one flush per event.
+   - The stream outlasts a short `WriteTimeout`.
+   - A cancelled `Service.Run` exits 0 with a stream open.
+4. **Keepalives.** The ticker, its restart on each send, and its serialization with sends
+   (behaviors 7 and 8), with their doc and changelog lines. Demo: under the race detector, a quiet
+   stream decodes no event while its comments arrive at the interval.
 
-Each slice leaves `mise run check` passing. Release dates the Unreleased section as v0.14.0, as
-v0.13.0's was dated.
+Each slice leaves `mise run check` passing. The release dates the Unreleased section as `v0.20.0`,
+as `v0.19.0`'s section was dated.
 
 **Out of scope**
 
-- HTTP: the media type, headers, flushing, and deadlines are `sse-writer`'s.
-- go-ai moving onto the codec, which is `go-ai-sse`'s.
-- Reconnection, and the `Last-Event-ID` header.
-- Size limits and Options.
-- A CloudEvents mapping, an iterator reader, and returning comments.
-- Defaulting an empty type to `"message"`.
+- The `Last-Event-ID` header, which the handler reads itself.
+- Ingress buffering headers such as `X-Accel-Buffering`, which `context-tools` settles.
+- An end-of-stream event, and the drain policy for answers still in flight. Both belong to
+  `context-tools`.
+- A `middleware/rate-limit` release. Its changes stay Unreleased.
+- HTTP/2 specifics beyond what `http.ResponseController` already covers.
+- go-ai's move onto the codec, which belongs to `go-ai-sse`.
 
 **Door**
 
-One-way for the `v0.14.0` tag and the exported `sse` API it publishes. Everything before the tag
-is two-way.
+One-way for the `v0.20.0` tag, which publishes the exported `EventStream`, `EventStreamOptions`,
+and sender API, and request contexts that carry the run context. Everything before the tag is
+two-way.
 
 **Release**
 
-go-core `v0.14.0`.
+go-web-sdk `v0.20.0`.
 
 ## Decisions
 
@@ -148,8 +154,8 @@ go-core `v0.14.0`.
 - capstone: Bunrei's `client` module is released by tag (`client/v0.1.0` at `api`); Mikoshi imports the published version, never a replace directive.
 - capstone: the SSE tasks are Mikoshi's (moved from `.bunrei`, which keeps docproc, docinfer, and go-messaging).
 - signal boundary: a model's token stream travels as direct SSE inside the one request that asked for it; only committed outcomes become go-messaging events (one per committed turn or analysis, with lineage); live views read events, never streams. Rejected: token deltas on go-messaging (a JetStream ack per publish, an outbox row and transaction, retention, lost cancellation).
-- SSE layering: the codec in go-core, the HTTP writer in go-web-sdk, go-ai on go-core's codec, built as Mikoshi's `sse-codec`, `sse-writer`, and `go-ai-sse` before `context-tools`, the writer's first consumer. Rejected: a Mikoshi-local relay package, tmaxmax/go-sse, r3labs/sse.
-- context-tools: SSE holds under replicas (request-scoped, no sticky sessions); settle ingress buffering and idle timeout, HTTP/2, and the drain policy for in-flight answers there.
+- SSE layering: the codec is go-core's `sse` package, the HTTP writer is go-web-sdk's `EventStream`, and `go-ai-sse` moves go-ai onto the codec before `context-tools`. Rejected: a Mikoshi-local relay package, tmaxmax/go-sse, r3labs/sse.
+- context-tools: SSE holds under replicas (request-scoped, no sticky sessions); settle ingress buffering and idle timeout, HTTP/2, any end-of-stream event (go-web-sdk's writer sends none), and the drain policy for in-flight answers there.
 - evidence 15: the browser's transport is Mikoshi's SSE relay (`event-relay`), which also serves
   the job subjects of the jobs Mikoshi submitted from Bunrei's job stream, so the live views see
   Bunrei's stages through Mikoshi; `ingest` re-raises none of them. Rejected: re-raising each
@@ -201,14 +207,13 @@ go-core `v0.14.0`.
 - event-extensions: go-core's envelope stays standard-library-only. Rejected: CloudEvents sdk-go v2.16.2 (no correlation helper; would replace the envelope every consumer reads).
 - context-events: an item's creation is `mikoshi.item.created` whatever its type; `context-tools`' analyses emit it and add no type.
 - context-events: `standing-analyses` resolves a deleted item's contexts itself, since `mikoshi.item.deleted` carries only `{"id"}` and the references it withdraws emit none.
-- sse-codec: `sse-writer` and `go-ai-sse` build on go-core `v0.14.0`'s `sse` package.
-  Rejected: an `event/sse` package, and the name `eventstream`.
 - sse-codec: `go-ai-sse` maps `sse.Event` (its `Data` a `[]byte`) onto `format.WireEvent`,
   deletes `internal/sse`, and keeps bounding a reply with go-ai's context and idle timeout, since
   the `Decoder` has no size limit or Options. Rejected: an `iter.Seq2` reader, and `iter.Pull2` (a
   coroutine per stream, and a `stop` go-ai's seam has nowhere to call).
-- sse-codec: `sse-writer` flushes after each `Encoder` call and writes keepalives with
-  `Encoder.Comment`.
+- sse-writer: a handler on `EventStream.Serve` must return once its context ends, or the drain outlasts `ShutdownTimeout` and `Service.Run` exits 1. Rejected: a run context the caller passes to `Serve`.
+- sse-writer: `Last-Event-ID` is left for the handler to read. `event-relay` and `sse-event-sequence` settle how the relay's cursor travels.
+- sse-writer: `middleware/rate-limit`'s go-core `v0.14.0` and go-web-sdk `v0.19.0` bumps stay Unreleased, and no rate-limit tag ships with `v0.20.0`.
 
 ## Pending edits
 
@@ -226,7 +231,7 @@ go-core `v0.14.0`.
 - coordinator · docs/data-intelligence.md, "The presentation": `.showcase` `acceptance` owns the
   scripted recovery; and Bunrei's pending prompt-tuning backlog edit is covered by `.mikoshi`
   `admin-overlay`, so Bunrei's sync drops it.
-- coordinator · roadmap/capstone.data-intelligence.mikoshi.toml, `sse-codec`: drop "carries its unreleased main" (v0.13.0 ships it).
+- coordinator · roadmap/capstone.data-intelligence.mikoshi.toml, `sse-codec`: the summary's last sentence reads "Released as go-core v0.14.0." in place of "which carries its unreleased main" (v0.13.0 shipped that main).
 - coordinator · roadmap/capstone.data-intelligence.bunrei.toml, `event-stream`: its wait on `event-extensions` holds only if Bunrei raises through an outbox; it appends via `messaging.Journal`, which sets extensions today.
 - coordinator · roadmap/capstone.data-intelligence.mikoshi.toml, `context-events`: repos gain `go-messaging`; the summary reads go-messaging v0.6.0 (nats/v0.6.0, postgres/v0.5.0) with `Setup.Recorder` in place of v0.4.0.
 - coordinator · same file, `event-relay`: drop "a database reset" from what recreates the stream; a reset arrives as `mikoshi.database.reset` on a kept stream, and only the root's `stack:reset` recreates it.
