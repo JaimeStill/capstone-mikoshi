@@ -24,7 +24,7 @@ func defineDomain(g *graph.Graph, n *Nodes) {
 
 func (n *Nodes) newContexts(s *graph.Scope) (*contexts.Service, error) {
 	db := s.Use(n.SQL)
-	return contexts.New(db, items.FilterFields(db)), nil
+	return contexts.New(db, items.FilterFields(db), s.Use(n.Runtime).Recorder), nil
 }
 
 func (n *Nodes) newUploads(s *graph.Scope) (*uploads.Service, error) {

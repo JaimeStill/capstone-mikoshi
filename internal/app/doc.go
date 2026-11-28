@@ -139,9 +139,10 @@
 // handler handed, at the construction site, its service, its policy from
 // the config node (cfg.Reads.Limits() for a collection read), and the
 // logger for its error writer (web.NewErrorWriter(logger, ...)). Mikoshi's
-// domain layers are contexts, the context tree, built over the sql node and
+// domain layers are contexts, the context tree, built over the sql node,
 // the items layer's FilterFields, the field contract its query filters are
-// checked against, and mounted at /api/contexts; uploads, the resumable
+// checked against, and the runtime's Recorder, which its commands emit
+// their events through, and mounted at /api/contexts; uploads, the resumable
 // uploads in progress, built over the sql node; and items, built over the
 // sql node, the storage node, and the contexts node and mounted at
 // /api/items, each read with the read limits allowing a cursor. The items

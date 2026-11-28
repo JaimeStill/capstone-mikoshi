@@ -467,7 +467,7 @@ func itemService(t *testing.T) (*items.Service, *pgtest.Database) {
 	t.Helper()
 	db := integration.Migrated(t)
 	d := data.New(db.Session(), query.MustCatalog(query.Patterns()))
-	s := items.New(d, integration.Objects(t, bucketName()), contexts.New(d, items.FilterFields(d)))
+	s := items.New(d, integration.Objects(t, bucketName()), contexts.New(d, items.FilterFields(d), nil))
 	if err := d.Verify(t.Context()); err != nil {
 		t.Fatalf("verify the items statements: %v", err)
 	}

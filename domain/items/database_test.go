@@ -63,7 +63,7 @@ func service(t *testing.T, responses ...sqltest.Response) fixture {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = objects.Shutdown(context.Background()) })
-	return fixture{service: items.New(db, objects, contexts.New(db, items.FilterFields(db))), rec: rec, fake: fake}
+	return fixture{service: items.New(db, objects, contexts.New(db, items.FilterFields(db), nil)), rec: rec, fake: fake}
 }
 
 func digest(content []byte) string {
@@ -821,7 +821,7 @@ func TestStore_RegistersAndVerifiesEveryStatement(t *testing.T) {
 		cfg := storage.Config{Container: "items"}
 		_ = cfg.Finalize("")
 		return cfg
-	}()), contexts.New(db, items.FilterFields(db)))
+	}()), contexts.New(db, items.FilterFields(db), nil))
 
 	var entry *query.Statements
 	for _, e := range db.Registry() {

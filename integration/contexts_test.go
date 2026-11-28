@@ -17,7 +17,10 @@ import (
 	"time"
 	"uuid"
 
+	"github.com/standards-lab/go-core/event"
 	"github.com/standards-lab/go-core/process/processtest"
+	"github.com/standards-lab/go-messaging/outbox"
+	msgpg "github.com/standards-lab/go-messaging/postgres"
 	"github.com/standards-lab/go-web-sdk"
 	"github.com/standards-lab/go-web-sdk/webtest"
 	"github.com/standards-lab/sqlate/postgres/pgtest"
@@ -391,7 +394,12 @@ func domainService(t *testing.T) (*contexts.Service, *pgtest.Database, *webtest.
 	db := integration.Database(t)
 	c := integration.Start(t, integration.Options{Database: db}).Client()
 	d := data.New(db.Session(), query.MustCatalog(query.Patterns()))
-	return contexts.New(d, items.FilterFields(d)), db, c
+	ob, err := outbox.New(msgpg.Outbox())
+	if err != nil {
+		t.Fatal(err)
+	}
+	events := event.NewRecorder(ob.Sink(), "mikoshi", event.Options{Extensions: map[string]string{"layer": "mikoshi"}})
+	return contexts.New(d, items.FilterFields(d), events), db, c
 }
 
 func move(t *testing.T, c *webtest.Client, id, body string) contexts.Context {
@@ -849,5 +857,97 @@ func TestContexts_DeleteRacingAMoveCommitsOne(t *testing.T) {
 	}
 	if reached := subtree(t, s, contexts.Root); len(reached) != rows {
 		t.Errorf("the walk from the root reaches %d of %d contexts, want every one", len(reached), rows)
+	}
+}
+
+func awaitEvent(t *testing.T, s *integration.Stream, typ, subject string) event.Event {
+	t.Helper()
+	var got event.Event
+	processtest.WaitFor(t, typ+" about "+subject, func() bool {
+		for _, e := range s.Received() {
+			if e.Type == typ && e.Subject == subject {
+				got = e
+				return true
+			}
+		}
+		return false
+	})
+	return got
+}
+
+func wantContextEvent(t *testing.T, e event.Event, res *webtest.Response, data map[string]any) {
+	t.Helper()
+	requestID := res.Header.Get("X-Request-Id")
+	if requestID == "" {
+		t.Fatal("the response carries no X-Request-Id")
+	}
+	want := map[string]string{"layer": "mikoshi", "correlationid": requestID}
+	if e.Source != "mikoshi" || !maps.Equal(e.Extensions, want) {
+		t.Errorf("%s: source %q, extensions %v; want mikoshi and exactly %v", e.Type, e.Source, e.Extensions, want)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(e.Data, &got); err != nil {
+		t.Fatalf("%s: data %s: %v", e.Type, e.Data, err)
+	}
+	gotJSON, _ := json.Marshal(got)
+	wantJSON, _ := json.Marshal(data)
+	if string(gotJSON) != string(wantJSON) {
+		t.Errorf("%s: data = %s; want %s", e.Type, gotJSON, wantJSON)
+	}
+}
+
+func TestContexts_CommandsPublishTheirEvents(t *testing.T) {
+	c := integration.Start(t, integration.Options{}).Client()
+	s := integration.Subscribe(t, contexts.ContextCreated.Type(), contexts.ContextRenamed.Type(), contexts.ContextMoved.Type(), contexts.ContextDeleted.Type())
+
+	res := c.Post(t, "/api/contexts", explicit(contexts.Root, "folder"))
+	folder := webtest.Decode[contexts.Context](t, res, http.StatusCreated)
+	wantContextEvent(t, awaitEvent(t, s, contexts.ContextCreated.Type(), folder.ID), res,
+		map[string]any{"id": folder.ID, "parent_id": contexts.Root, "name": "folder", "kind": "explicit", "filter": nil})
+
+	res = c.Post(t, "/api/contexts", queryContext(contexts.Root, "saved", `[{"field":"kind","op":"null"}]`))
+	saved := webtest.Decode[contexts.Context](t, res, http.StatusCreated)
+	wantContextEvent(t, awaitEvent(t, s, contexts.ContextCreated.Type(), saved.ID), res,
+		map[string]any{"id": saved.ID, "parent_id": contexts.Root, "name": "saved", "kind": "query", "filter": []any{map[string]any{"field": "kind", "op": "null"}}})
+
+	res = c.Put(t, "/api/contexts/"+saved.ID, `{"name":"kept"}`)
+	webtest.Decode[contexts.Context](t, res, http.StatusOK)
+	wantContextEvent(t, awaitEvent(t, s, contexts.ContextRenamed.Type(), saved.ID), res,
+		map[string]any{"id": saved.ID, "parent_id": contexts.Root, "name": "kept", "kind": "query", "filter": []any{map[string]any{"field": "kind", "op": "null"}}})
+
+	res = c.Post(t, "/api/contexts/"+saved.ID+"/move", moveTo(folder.ID))
+	webtest.Decode[contexts.Context](t, res, http.StatusOK)
+	wantContextEvent(t, awaitEvent(t, s, contexts.ContextMoved.Type(), saved.ID), res,
+		map[string]any{"id": saved.ID, "parent_id": folder.ID, "name": "kept", "kind": "query", "filter": []any{map[string]any{"field": "kind", "op": "null"}}})
+
+	res = c.Delete(t, "/api/contexts/"+folder.ID+"?confirm=1").Expect(t, http.StatusNoContent)
+	wantContextEvent(t, awaitEvent(t, s, contexts.ContextDeleted.Type(), folder.ID), res, map[string]any{"id": folder.ID})
+
+	var deleted []string
+	for _, e := range s.Received() {
+		if e.Type == contexts.ContextDeleted.Type() {
+			deleted = append(deleted, e.Subject)
+		}
+	}
+	if !slices.Equal(deleted, []string{folder.ID}) {
+		t.Errorf("deleted events about %v; want one, about %s, and none about its descendant %s", deleted, folder.ID, saved.ID)
+	}
+}
+
+func TestContexts_CommandsThatChangeNothingPublishNothing(t *testing.T) {
+	c := integration.Start(t, integration.Options{}).Client()
+	s := integration.Subscribe(t, contexts.ContextRenamed.Type(), contexts.ContextMoved.Type(), contexts.ContextCreated.Type())
+
+	child := createContext(t, c, explicit(contexts.Root, "child"))
+	webtest.Decode[contexts.Context](t, c.Put(t, "/api/contexts/"+child.ID, `{"name":"child"}`), http.StatusOK)
+	move(t, c, child.ID, moveTo(contexts.Root))
+	c.Put(t, "/api/contexts/"+child.ID, `{"name":""}`).Expect(t, http.StatusBadRequest)
+	marker := createContext(t, c, explicit(contexts.Root, "marker"))
+
+	got := s.Await(t, marker.ID)
+	for _, e := range got {
+		if e.Subject == child.ID && e.Type != contexts.ContextCreated.Type() {
+			t.Errorf("%s about %s; want nothing published for a command that changed nothing", e.Type, child.ID)
+		}
 	}
 }

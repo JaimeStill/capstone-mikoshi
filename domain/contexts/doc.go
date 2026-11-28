@@ -17,14 +17,22 @@
 // the context's whole subtree in one statement once the caller confirms
 // the number of its descendants, which a refused delete reports. A rename
 // leaves the shape as it is and takes no lock; the root's name and place
-// are fixed.
+// are fixed. Each command that changes the tree emits one event through
+// the recorder the service is built with, in the transaction that makes
+// the change, and a command that is refused, fails, or changes nothing
+// emits none.
 // The descendant and ancestor walks discard a context they have visited,
 // so each terminates even on a cycle in the table.
 //
 // The package's API:
 //
-//   - [Service], built by [New] over a field contract: the layer's
-//     operations, one per endpoint, and the subtree resolution.
+//   - [Service], built by [New] over a field contract and a [Recorder]:
+//     the layer's operations, one per endpoint, and the subtree
+//     resolution.
+//   - [Recorder]: the recorder the layer emits its events through.
+//   - [ContextCreated], [ContextRenamed], [ContextMoved], and
+//     [ContextDeleted], with [ContextData] and [ContextDeletedData]: the
+//     events the commands emit, each about the context's id.
 //   - [Routes]: the route group the composition root mounts.
 //   - [Context], [Kind] with [KindExplicit] and [KindQuery], and [Root]:
 //     the read shape, the kinds, and the root's id.
