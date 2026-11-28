@@ -147,8 +147,8 @@ Each command that changes an item or a reference emits one event, written to the
 transaction that makes the change ([`domain/items/messaging.go`](../domain/items/messaging.go)),
 and published to the `MIKOSHI` stream once that transaction commits. A command that is refused,
 fails, or changes nothing emits nothing: a completion that returns an item an earlier or
-overlapping completion created, a placing of a reference already in place, and a withdrawing of
-one not in place answer as before and publish no event. Reads, the covered read, and the
+overlapping completion created, placing a reference already in place, and withdrawing one not in
+place answer as before and publish no event. Reads, the covered read, and the
 reclaimers emit nothing; a reclaimer removing an orphaned blob is not an item command.
 
 | Type | Subject | Command | Data |
@@ -160,11 +160,10 @@ reclaimers emit nothing; a reclaimer removing an orphaned blob is not an item co
 
 A created item's data is the item as the read presents it, without `created_at`, its `type`
 `file` or `record`. A file's event is written by the transaction that creates the item: the
-first when its blob is already `available`, the second, which marks the blob, otherwise
-([The blob protocol](#the-blob-protocol)). A delete emits one event, on the item; the references
-it removes with the item emit none. Every event carries `source` `mikoshi`, the `layer` extension
-`mikoshi`, and the `correlationid` extension: the request's id, the `X-Request-Id` its response
-carries, or a fresh UUIDv7 when the command runs outside a request. It carries no `causationid`.
+first transaction when the blob is already `available`, otherwise the second, which marks the
+blob ([The blob protocol](#the-blob-protocol)). A delete emits one event, on the item; the
+references it removes with the item emit none. Every event carries the attributes and extensions
+[Stack](stack.md#messaging) lists.
 
 ## The HTTP API
 

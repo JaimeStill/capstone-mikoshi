@@ -66,16 +66,19 @@ sqlint does not check the migrations' forms, so review holds the migrations list
 
 ## Messaging
 
-The broker is the owner of the stream `MIKOSHI`: its `Start` creates the stream or updates it to
-the `nats` block, capturing the subjects `mikoshi.>` and keeping each event for `max_age`, 168h.
-Every event type Mikoshi emits is under the `mikoshi` prefix and is published with its type as
-the subject. A domain emits through the runtime's recorder in its command's transaction, so the
-event is written to the outbox exactly when the change it reports commits; the relay publishes
-each committed outbox row to the broker. The recorder stamps the `layer` extension `mikoshi` on
-every event, and each raise sets `correlationid` through the
-[`correlation`](../correlation/doc.go) package: the request's id, or a fresh UUIDv7 outside a
-request. The relay holds the quiesce gate shared for each row, so it pauses while an admin verb
-holds the gate. `/readyz` lists `broker` and `relay`.
+The broker owns the stream `MIKOSHI`: its `Start` creates the stream or updates it to the `nats`
+block, capturing the subjects `mikoshi.>` and keeping each event for `max_age`, 168h. Every event
+type Mikoshi emits starts with `mikoshi.`, and each event is published with its type as its NATS
+subject. A domain emits through the runtime's recorder in its command's transaction, so the
+outbox row commits exactly when the change it reports does, and the relay publishes each committed
+outbox row to the broker. The relay holds the quiesce gate shared for each row, so it
+pauses while an admin verb holds the gate. `/readyz` lists `broker` and `relay`.
+
+Every event carries `source` `mikoshi`. The recorder stamps the `layer` extension `mikoshi` on
+every event, and each raise sets the `correlationid` extension through the
+[`correlation`](../correlation/doc.go) package: the request's id, which its response carries as
+`X-Request-Id`, or a fresh UUIDv7 when the command runs outside a request. No event carries
+`causationid`.
 
 The domains use go-messaging's base module alone, through the recorder the composition root
 hands them; `correlation` uses go-core's `event` package. Only the composition root imports
@@ -87,8 +90,8 @@ The sweeper also runs the messaging tables' retentions, each scheduled by its bl
 
 | Reclaimer | What it removes | Defaults |
 |-----------|-----------------|----------|
-| `outbox_messages` | Published outbox rows published more than `age` ago | `interval` 5m, `budget` 500, `age` 168h |
-| `inbox_messages` | Handled inbox rows handled more than `age` ago | `interval` 5m, `budget` 500, `age` 168h |
+| `outbox_messages` | Outbox rows published more than `age` ago | `interval` 5m, `budget` 500, `age` 168h |
+| `inbox_messages` | Inbox rows handled more than `age` ago | `interval` 5m, `budget` 500, `age` 168h |
 
 Each field has an override, `MIKOSHI_SWEEP_<RECLAIMER>_<FIELD>`, such as
 `MIKOSHI_SWEEP_OUTBOX_MESSAGES_AGE`. The `messaging` and `nats` blocks take the

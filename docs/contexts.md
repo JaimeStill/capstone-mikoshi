@@ -125,9 +125,9 @@ name `context.tree`, from the lock registry in [`data/locks.go`](../data/locks.g
 when the transaction ends. Its statement, [`data/statements/lock.sql`](../data/statements/lock.sql),
 is native tier ([Stack](stack.md#standard-and-native-tiers)).
 
-A rename takes no lock. It runs in a transaction of its own, so its event commits with it, but its
-one statement changes no context's parent, so it cannot make a cycle or orphan a subtree, and the
-sibling-name constraint refuses a duplicate name against every concurrent change.
+A rename takes no lock. Its one statement changes no context's parent, so it cannot make a cycle
+or orphan a subtree, and the sibling-name constraint refuses a duplicate name against every
+concurrent change. It still runs in a transaction of its own, so its event commits with it.
 
 The tree is built so it can move into a library of its own (`context-tree-graduation`), as blobfs
 holds a file tree. A library cannot rely on a native lock, so the library is planned to use
@@ -153,9 +153,7 @@ publish no event. Reads and the subtree resolution emit nothing.
 Every event's subject is the context's id, and the data is the context as stored after the
 command, `filter` null on an explicit context. A delete emits one event, on the context it names;
 its descendants and their item references are deleted with it and emit none. Every event carries
-`source` `mikoshi`, the `layer` extension `mikoshi`, and the `correlationid` extension: the
-request's id, the `X-Request-Id` its response carries, or a fresh UUIDv7 when the command runs
-outside a request. It carries no `causationid`.
+the attributes and extensions [Stack](stack.md#messaging) lists.
 
 ## Rejected alternatives
 

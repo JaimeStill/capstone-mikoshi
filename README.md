@@ -20,8 +20,8 @@ mise run db:up
 mise run serve
 ```
 
-The service needs its database: `db:up` starts the development PostgreSQL
-([Database](#database)), and startup fails, naming the database node, when it can't be reached.
+The service needs its development stack: `db:up` starts PostgreSQL, SeaweedFS, and NATS
+([Database](#database)), and startup fails, naming the node, when one can't be reached.
 `serve` builds the web client in [`web/`](web/README.md) first; the service embeds the build and
 serves its shell at `/`. The service logs `server ready` on `localhost:8080` (the `local` overlay
 binds loopback and runs debug logging). From a second shell:
@@ -46,10 +46,10 @@ Each task wraps a plain command, so the repository works without mise:
 | `mise run vet` | `go vet -tags integration ./...` | Compile-check and vet, the integration suite included |
 | `mise run serve` | `go run ./cmd/server` | Run the service locally, after `client:build` |
 | `mise run test` | `go test -race ./...` | Run the unit tier, after `client:build` |
-| `mise run integration` | `docker compose up -d --wait --build postgres-integration`, `go test -race -count=1 -tags integration ./integration/` | Start the integration stack, run the integration tier against the built service, and tear the stack down, after `client:build` |
-| `mise run db:up` | `docker compose up -d --wait --build` | Build and start the development PostgreSQL and wait until it is healthy |
-| `mise run db:down` | `docker compose down` | Stop the development PostgreSQL, keeping its volume |
-| `mise run db:reset` | `docker compose down -v` | Stop the development PostgreSQL and drop its volume |
+| `mise run integration` | `docker compose up -d --wait --build postgres-integration seaweedfs-integration nats-integration`, `go test -race -count=1 -tags integration ./integration/` | Start the integration stack, run the integration tier against the built service, and tear the stack down, after `client:build` |
+| `mise run db:up` | `docker compose up -d --wait --build` | Build and start the development stack and wait until it is healthy |
+| `mise run db:down` | `docker compose down` | Stop the development stack, keeping its volumes |
+| `mise run db:reset` | `docker compose down -v` | Stop the development stack and drop its volumes |
 | `mise run client:build` | `mise -C web run build` | Build the web client into `web/dist/`, which the service embeds |
 | `mise run client:check` | `mise -C web run check` | Run the web client's own check: lint, types, unit, and browser tests |
 | `mise run dev` | `vite build --watch` in `web/` beside `air` | Rebuild the client and restart the service on each change (`.air.toml`) |
@@ -89,12 +89,10 @@ vector refused in space 1.
 ## Database
 
 Mikoshi runs on PostgreSQL 19 with pgvector, built from
-[`compose/postgres/Dockerfile`](compose/postgres/Dockerfile). The development stack is the
-`postgres` service in [`compose.yml`](compose.yml), with its data in a named volume:
-
-- `mise run db:up` builds and starts it on `127.0.0.1:5440` and waits until it is healthy.
-- `mise run db:down` stops it and keeps the volume.
-- `mise run db:reset` stops it and drops the volume.
+[`compose/postgres/Dockerfile`](compose/postgres/Dockerfile). The development stack in
+[`compose.yml`](compose.yml) runs it on `127.0.0.1:5440`, beside SeaweedFS's S3 gateway on
+`127.0.0.1:8336` and NATS on `127.0.0.1:4228` ([Stack](docs/stack.md)), each with its data in a
+named volume. `db:up` starts the stack, `db:down` stops it, and `db:reset` also drops the volumes.
 
 `POSTGRES_PORT` moves the port. The local overlay points the service at `127.0.0.1:5440`, so a
 moved port needs `MIKOSHI_DATABASE_PORT` too.
@@ -116,11 +114,12 @@ covers which packages may use pgvector and what a move to another engine changes
 `mise run integration` runs the integration tier on a developer's machine, and CI's integration
 job runs the same task on push to main and on demand. The task:
 
-1. starts the `postgres-integration` service, under the `integration` compose profile, as the
-   isolated compose project `mikoshi-integration` on `127.0.0.1:5441`, with its data on tmpfs;
+1. starts PostgreSQL on `127.0.0.1:5441`, SeaweedFS on `8337`, and NATS on `4229`, under the
+   `integration` compose profile, as the isolated compose project `mikoshi-integration`, with
+   their data on tmpfs;
 2. runs the suite, where each test makes its own empty throwaway database on the server
-   `MIKOSHI_INTEGRATION_DSN` names and points the service at it through the
-   `MIKOSHI_DATABASE_*` variables;
+   `MIKOSHI_INTEGRATION_DSN` names, and points the service at it, the gateway
+   `MIKOSHI_INTEGRATION_STORAGE` names, and the NATS server `MIKOSHI_INTEGRATION_NATS` names;
 3. prints the stack's logs if the run fails, and tears the stack down.
 
 `POSTGRES_PORT` moves the integration port too, and `MIKOSHI_INTEGRATION_DSN` follows it. The
@@ -142,6 +141,7 @@ Configuration layers in a fixed precedence, later sources winning:
      `MIKOSHI_DATABASE_USER`, `MIKOSHI_DATABASE_PASSWORD`, and the pool's variables
      ([Database](#database))
    - go-storage's `MIKOSHI_STORAGE_*` variables
+   - `MIKOSHI_MESSAGING_*` and `MIKOSHI_NATS_*` ([Stack](docs/stack.md#messaging))
    - `MIKOSHI_READS_DEFAULT_SIZE`, `MIKOSHI_READS_MAX_SIZE`
    - `MIKOSHI_UPLOADS_LIFETIME`, `MIKOSHI_UPLOADS_MAX_APPEND_SIZE`
    - `MIKOSHI_SWEEP_<RECLAIMER>_<FIELD>` ([Items](docs/items.md#reclamation))
@@ -154,17 +154,9 @@ not declare fails the load.
 ## Building out the service
 
 The composition root, `internal/app`, is laid out as one file per layer of the architecture,
-and those files are the build points:
-
-- `infrastructure.go` for the services the application composes on
-- `admin.go` for the administrative services
-- `domain.go` for the domain services
-- `reactors.go` for the process-lifetime entry points an occurrence drives
-- `middleware.go` for the router-level middleware
-
-[Building out the service](docs/building-out.md) covers how the layer files define and mount
-their nodes, and walks through adding a domain service, an infrastructure service, an admin
-service, a reactor, middleware, and configuration.
+and those files are the build points. [Building out the service](docs/building-out.md) covers
+how the layer files define and mount their nodes, and walks through adding a domain service, an
+infrastructure service, an admin service, a reactor, middleware, and configuration.
 [Contexts](docs/contexts.md) covers the first domain service, the context tree under
 `/api/contexts`: its model, its filters, its routes, and its tree lock.
 [Items](docs/items.md) covers uploads, records, blobs, references, and reclamation.
