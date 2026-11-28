@@ -4,7 +4,7 @@ go 1.27.4
 
 require (
 	github.com/standards-lab/docproc v0.10.0
-	github.com/standards-lab/go-core v0.12.0
+	github.com/standards-lab/go-core v0.13.0
 	github.com/standards-lab/go-database v0.13.0
 	github.com/standards-lab/go-database/postgres v0.7.0
 	github.com/standards-lab/go-storage v0.8.0

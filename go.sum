@@ -53,8 +53,8 @@ github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZb
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
 github.com/standards-lab/docproc v0.10.0 h1:4neT6syfThhNA9YmfHKMRt6OXt1MXSI9uJbFGOUE19k=
 github.com/standards-lab/docproc v0.10.0/go.mod h1:ZA8JYQPooA6YA84b00Lpu5AiSL2VSj/u7QnenltqVBA=
-github.com/standards-lab/go-core v0.12.0 h1:sqrzK6QSppEYpwvVAyiWgzNuOsjfK0Kwe86GPuZpHsU=
-github.com/standards-lab/go-core v0.12.0/go.mod h1:Yl/R+gM9YWczsePBCKXdPGh3FSdZ/5i8SapLIh3BDHU=
+github.com/standards-lab/go-core v0.13.0 h1:jYiUiE63Z4/3q+8e+ATE+MuqI40RrI4BZrlD/sdm/Zg=
+github.com/standards-lab/go-core v0.13.0/go.mod h1:Yl/R+gM9YWczsePBCKXdPGh3FSdZ/5i8SapLIh3BDHU=
 github.com/standards-lab/go-database v0.13.0 h1:xBiN+gZE2Q0x+S/N0DgaDNqT9feHxcu43BrHXpFfLnI=
 github.com/standards-lab/go-database v0.13.0/go.mod h1:M4jca1wtAP4MUDAdLa+lgvBGAzyfc8A1EdpVaQssXfc=
 github.com/standards-lab/go-database/postgres v0.7.0 h1:M4mGIgcMT3mil+DqEAMjm5sN64OZsO1U6LUKCc8lOmg=
