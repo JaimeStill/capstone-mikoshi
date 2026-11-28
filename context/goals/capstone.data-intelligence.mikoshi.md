@@ -12,7 +12,7 @@
 4. [x] upload
 5. [x] browser-upload
 6. [x] items
-7. [ ] event-extensions
+7. [x] event-extensions
 8. [ ] context-events
 9. [ ] sse-codec
 10. [ ] sse-writer
@@ -95,6 +95,10 @@
   (that repository is `.showcase`'s root, which a plan can't edit), except the relay's line.
 - context-tools: each committed turn's event carries the model call's timing (`took_ms`) and
   `usage`, which the signal-flow view's go-ai and Torii rows read.
+- event-extensions: Mikoshi sets `layer` once at its composition root, in the recorder's `event.Options.Extensions`.
+- event-extensions: go-core names no extension and derives none; `context-events` and `ingest` set `correlationid` and `causationid` in Mikoshi's own code. Rejected: correlation constants and a causing-event helper in go-core.
+- event-extensions: go-core's envelope stays standard-library-only. Rejected: CloudEvents sdk-go v2.16.2 (no correlation helper; would replace the envelope every consumer reads).
+- event-extensions: released as go-core `v0.13.0`, carrying main's unreleased commits; `sse-codec` releases `v0.14.0`.
 
 ## Pending edits
 
@@ -127,3 +131,6 @@
 - coordinator · docs/data-intelligence.md, "The presentation": `.showcase` `acceptance` owns the
   scripted recovery; and Bunrei's pending prompt-tuning backlog edit is covered by `.mikoshi`
   `admin-overlay`, so Bunrei's sync drops it.
+- capstone-data-intelligence · context/events.md, "How the extensions are set" and Ownership: `.mikoshi` `event-extensions` (not a `.bunrei` task) adds extensions to `Raise`; carried on `context-events`' branch.
+- coordinator · roadmap/capstone.data-intelligence.mikoshi.toml, `sse-codec`: drop "carries its unreleased main" (v0.13.0 ships it).
+- coordinator · roadmap/capstone.data-intelligence.bunrei.toml, `event-stream`: its wait on `event-extensions` holds only if Bunrei raises through an outbox; it appends via `messaging.Journal`, which sets extensions today.
