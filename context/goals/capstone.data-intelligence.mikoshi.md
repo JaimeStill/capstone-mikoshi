@@ -14,7 +14,7 @@
 6. [x] items
 7. [x] event-extensions
 8. [x] context-events
-9. [ ] sse-codec
+9. [x] sse-codec
 10. [ ] sse-writer
 11. [ ] go-ai-sse
 12. [ ] hybrid-search
@@ -33,6 +33,114 @@
 25. [ ] signal-flow
 26. [ ] image
 27. [ ] foundation-notes
+
+## Task brief · sse-codec
+
+**Problem**
+
+go-web-sdk has to write `text/event-stream`, and go-ai reads it through a decoder of its own that
+no other module can import. Under the SSE layering Decision, go-core owns the codec: a stream read
+and written to the WHATWG HTML standard's rules, with no HTTP or model concerns. That lets
+`sse-writer` write through it and `go-ai-sse` read through it, both before `context-tools` needs
+the writer.
+
+**Behaviors**
+
+1. A root-level `sse` package uses only the standard library and imports nothing from HTTP or from
+   go-core's other packages. Its package doc says why it belongs in go-core: the pattern is
+   process-level and universal, since clients read event streams and servers write them, and it
+   serves neither alone.
+2. An `Event` has a `Type` string, a `Data []byte`, and an `ID` string. Its events are neutral:
+   nothing maps them to or from CloudEvents.
+3. `NewDecoder(io.Reader)` returns a `Decoder`. Its `Next() (Event, error)` reads until a blank
+   line ends a block that holds a data field, then returns that event. At the stream's end it
+   returns `io.EOF`, and it returns a read error unchanged. `Next` is the only way to read; there
+   is no iterator form.
+4. The reader follows WHATWG's line rules:
+   - One leading BOM is stripped, and no other.
+   - A line ends at CR, LF, or CRLF, including a CRLF split across two reads. A trailing CR is
+     remembered, never read past, so an event dispatches as soon as its bytes arrive.
+   - A line with no colon is a field name with an empty value.
+   - One space after the colon is removed.
+   - A line or event that the stream's end cuts off is discarded.
+5. The reader follows WHATWG's field rules:
+   - The last `event` field names the type, and the type resets after each block. An empty `Type`
+     means the stream named none.
+   - Data values are joined with LF. A `data` field with an empty value still dispatches.
+   - A block with no data dispatches nothing.
+   - An `id` holding NUL is ignored. The last id carries to every later event until an empty id
+     clears it.
+   - Comments and unknown fields are skipped. A comment is never returned.
+6. The reader decodes UTF-8 with replacement, one U+FFFD for each maximal subpart, as the Encoding
+   Standard does. Every `Type`, `Data`, and `ID` is valid UTF-8. Each event's `Data` is its own
+   slice, never shared with a later read.
+7. `Decoder.Retry() (time.Duration, bool)` reports the reconnection time the stream's last valid
+   `retry` field set, in milliseconds. A `retry` value is valid when it is one or more ASCII digits
+   that fit in a `time.Duration`; any other value is ignored. Before a valid `retry` arrives,
+   `Retry` reports false. A `retry` field dispatches no event, and an event carries no retry.
+8. The reader holds only the line and event being built, with no size limit. Its doc says the
+   caller bounds an untrusted stream through its context or transport.
+9. `NewEncoder(io.Writer)` returns an `Encoder` that sends each event, comment, or retry to its
+   writer in exactly one `Write` call, so an HTTP writer can flush once per event. A write error is
+   returned unchanged.
+10. `Encoder.Encode(Event)` writes the following, ending each line with LF:
+    - an `event` line when `Type` is set, and an `id` line when `ID` is set;
+    - one `data` line for each line of `Data`, split at CR, LF, and CRLF, with an empty `Data`
+      written as one empty `data` line;
+    - a blank line to end the event.
+
+    Decoding `Encode`'s output returns the same event, except that CR and CRLF in `Data` come back
+    as LF.
+11. `Encode` returns an error and writes nothing when `Type` or `ID` contains CR or LF, or `ID`
+    contains NUL.
+12. `Encoder.Comment(string)` writes the text as one comment line for each of its lines, split at
+    CR, LF, and CRLF. The reader skips all of them, and no event dispatches.
+13. `Encoder.Retry(time.Duration)` writes a `retry` line in whole milliseconds, followed by a blank
+    line. A decoder reading it reports that duration from `Retry` and dispatches no event. A
+    negative duration is an error and writes nothing.
+14. The README's package list, the context's capability map, and the changelog's Unreleased section
+    describe `sse`. The changelog records the addition as non-breaking.
+
+**Test seams**
+
+- The `sse` package's exported API: `NewDecoder`, `Decoder.Next`, `Decoder.Retry`, `NewEncoder`,
+  `Encoder.Encode`, `Encoder.Comment`, and `Encoder.Retry`. The tests are black-box.
+- The decoder runs over a whole reader, a reader that returns one byte at a time, a reader that
+  splits every CRLF across two reads, a reader that returns bytes as a test releases them, and a
+  reader that fails.
+- The encoder writes to a writer that records each `Write` call, and to a writer that fails.
+
+**Slices**
+
+1. **The reader.** go-ai's decoder and its table tests are ported to `sse`, with `Data` as
+   `[]byte`. The slice adds the `retry` cases, along with the package doc, the admission
+   rationale, the README, the capability map, and the Unreleased changelog entry (behaviors 1–8,
+   and 14 for the reader). Demo: the table passes over whole, one-byte, and split reads.
+2. **The writer.** `Encoder`, with its rejections and its round trip through `Decoder`, plus its
+   doc, README, and changelog lines (behaviors 9–13, and 14 for the writer). Demo: an encoded
+   sequence of events, comments, and a retry decodes back to the same events and the same
+   `Retry`, with one `Write` per call.
+
+Each slice leaves `mise run check` passing. Release dates the Unreleased section as v0.14.0, as
+v0.13.0's was dated.
+
+**Out of scope**
+
+- HTTP: the media type, headers, flushing, and deadlines are `sse-writer`'s.
+- go-ai moving onto the codec, which is `go-ai-sse`'s.
+- Reconnection, and the `Last-Event-ID` header.
+- Size limits and Options.
+- A CloudEvents mapping, an iterator reader, and returning comments.
+- Defaulting an empty type to `"message"`.
+
+**Door**
+
+One-way for the `v0.14.0` tag and the exported `sse` API it publishes. Everything before the tag
+is two-way.
+
+**Release**
+
+go-core `v0.14.0`.
 
 ## Decisions
 
@@ -91,9 +199,16 @@
   `usage`, which the signal-flow view's go-ai and Torii rows read.
 - event-extensions: go-core names no extension and derives none; `ingest` sets `causationid` from the batch in Mikoshi's own code, as the `correlation` package sets `correlationid`. Rejected: correlation constants and a causing-event helper in go-core.
 - event-extensions: go-core's envelope stays standard-library-only. Rejected: CloudEvents sdk-go v2.16.2 (no correlation helper; would replace the envelope every consumer reads).
-- event-extensions: released as go-core `v0.13.0`, carrying main's unreleased commits; `sse-codec` releases `v0.14.0`.
 - context-events: an item's creation is `mikoshi.item.created` whatever its type; `context-tools`' analyses emit it and add no type.
 - context-events: `standing-analyses` resolves a deleted item's contexts itself, since `mikoshi.item.deleted` carries only `{"id"}` and the references it withdraws emit none.
+- sse-codec: `sse-writer` and `go-ai-sse` build on go-core `v0.14.0`'s `sse` package.
+  Rejected: an `event/sse` package, and the name `eventstream`.
+- sse-codec: `go-ai-sse` maps `sse.Event` (its `Data` a `[]byte`) onto `format.WireEvent`,
+  deletes `internal/sse`, and keeps bounding a reply with go-ai's context and idle timeout, since
+  the `Decoder` has no size limit or Options. Rejected: an `iter.Seq2` reader, and `iter.Pull2` (a
+  coroutine per stream, and a `stop` go-ai's seam has nowhere to call).
+- sse-codec: `sse-writer` flushes after each `Encoder` call and writes keepalives with
+  `Encoder.Comment`.
 
 ## Pending edits
 
