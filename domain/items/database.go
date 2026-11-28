@@ -9,11 +9,13 @@ import (
 	"slices"
 	"uuid"
 
+	"github.com/standards-lab/go-core/event"
 	"github.com/standards-lab/go-storage"
 	"github.com/standards-lab/go-web-sdk"
 	"github.com/standards-lab/sqlate"
 	"github.com/standards-lab/sqlate/query"
 
+	"github.com/JaimeStill/capstone-mikoshi/correlation"
 	"github.com/JaimeStill/capstone-mikoshi/data"
 )
 
@@ -23,6 +25,7 @@ var files embed.FS
 type store struct {
 	db            *data.Database
 	objects       *storage.Store
+	events        *Recorder
 	stmts         *query.Statements
 	findRows      query.Rows[Item]
 	uploadRows    query.Rows[Item]
@@ -48,12 +51,13 @@ type store struct {
 	dropOrphan    query.Statement
 }
 
-func newStore(db *data.Database, objects *storage.Store) *store {
+func newStore(db *data.Database, objects *storage.Store, events *Recorder) *store {
 	stmts := db.Catalog.MustCompile(files, "statements", db.Dialect())
 	scan := query.Scanner[Item]()
 	s := &store{
 		db:            db,
 		objects:       objects,
+		events:        events,
 		stmts:         stmts,
 		findRows:      stmts.Statement("find").Scan(scan),
 		uploadRows:    stmts.Statement("find_upload").Scan(scan),
@@ -159,7 +163,7 @@ type newItem struct {
 	kind     *string
 }
 
-func (s *store) insert(ctx context.Context, tx *sqlate.Tx, n newItem) (Item, error) {
+func (s *store) insert(ctx context.Context, tx *sqlate.Tx, q *event.Queue, n newItem) (Item, error) {
 	args := query.Args{
 		"id":         uuid.NewV7().String(),
 		"type":       string(n.itemType),
@@ -178,13 +182,23 @@ func (s *store) insert(ctx context.Context, tx *sqlate.Tx, n newItem) (Item, err
 		args["upload_id"] = n.UploadID
 	}
 	created, _, err := s.create.One(ctx, tx, args)
-	return created, err
+	if err != nil {
+		return Item{}, err
+	}
+	raiseCreated(ctx, q, created)
+	return created, nil
 }
 
 const constraintReferenceItem = "fk_context_item_item"
 
 func (s *store) place(ctx context.Context, contextID, itemID string) error {
-	_, err := s.placeRef.Exec(ctx, s.db, query.Args{"context_id": contextID, "item_id": itemID})
+	_, err := s.db.Transact(ctx, s.events.Emit(ctx, func(tx *sqlate.Tx, q *event.Queue) (struct{}, error) {
+		if _, err := s.placeRef.Exec(ctx, tx, query.Args{"context_id": contextID, "item_id": itemID}); err != nil {
+			return struct{}{}, err
+		}
+		raiseReference(ctx, q, ContextItemAdded, contextID, itemID)
+		return struct{}{}, nil
+	}), nil)
 	if errors.Is(err, sqlate.ErrUniqueViolation) {
 		return nil
 	}
@@ -198,7 +212,7 @@ func (s *store) place(ctx context.Context, contextID, itemID string) error {
 }
 
 func (s *store) delete(ctx context.Context, id string) error {
-	_, err := s.db.Transact(ctx, func(tx *sqlate.Tx) (struct{}, error) {
+	_, err := s.db.Transact(ctx, s.events.Emit(ctx, func(tx *sqlate.Tx, q *event.Queue) (struct{}, error) {
 		args := query.Args{"id": id}
 		if _, err := s.touchItemBlob.Exec(ctx, tx, args); err != nil {
 			return struct{}{}, err
@@ -213,19 +227,27 @@ func (s *store) delete(ctx context.Context, id string) error {
 		if n == 0 {
 			return struct{}{}, sql.ErrNoRows
 		}
+		ItemDeleted.Raise(q, id, ItemDeletedData{ID: id}, correlation.RaiseOptions(ctx))
 		return struct{}{}, nil
-	}, nil)
+	}), nil)
 	return err
 }
 
 func (s *store) withdraw(ctx context.Context, contextID, itemID string) error {
-	n, err := s.withdrawRef.Exec(ctx, s.db, query.Args{"context_id": contextID, "item_id": itemID})
-	if err != nil || n > 0 {
-		return err
-	}
-	_, err = s.find(ctx, itemID)
-	if errors.Is(err, sql.ErrNoRows) {
-		return fmt.Errorf("%w: %s", ErrItemNotFound, itemID)
-	}
+	_, err := s.db.Transact(ctx, s.events.Emit(ctx, func(tx *sqlate.Tx, q *event.Queue) (struct{}, error) {
+		n, err := s.withdrawRef.Exec(ctx, tx, query.Args{"context_id": contextID, "item_id": itemID})
+		if err != nil {
+			return struct{}{}, err
+		}
+		if n > 0 {
+			raiseReference(ctx, q, ContextItemRemoved, contextID, itemID)
+			return struct{}{}, nil
+		}
+		_, err = s.findRows.One(ctx, tx, query.Args{"id": itemID})
+		if errors.Is(err, sql.ErrNoRows) {
+			return struct{}{}, fmt.Errorf("%w: %s", ErrItemNotFound, itemID)
+		}
+		return struct{}{}, err
+	}), nil)
 	return err
 }

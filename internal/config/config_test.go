@@ -7,6 +7,8 @@ import (
 
 	libconfig "github.com/standards-lab/go-core/config"
 	"github.com/standards-lab/go-core/logging"
+	"github.com/standards-lab/go-messaging"
+	"github.com/standards-lab/go-messaging/nats"
 	"github.com/standards-lab/go-web-sdk"
 
 	"github.com/JaimeStill/capstone-mikoshi/internal/config"
@@ -492,6 +494,11 @@ func TestSweep_FinalizeDefaults(t *testing.T) {
 	if got := s.OrphanBlobs.StaleAge.Duration(); got != 24*time.Hour {
 		t.Errorf("OrphanBlobs.StaleAge = %s, want 24h", got)
 	}
+	for name, p := range map[string]config.RetentionPolicy{"OutboxMessages": s.OutboxMessages, "InboxMessages": s.InboxMessages} {
+		if p.Interval.Duration() != 5*time.Minute || *p.Budget != 500 || p.Age.Duration() != 168*time.Hour {
+			t.Errorf("%s = {%s %d %s}, want {5m 500 168h}", name, p.Interval, *p.Budget, p.Age)
+		}
+	}
 	if s.Env != (config.SweepEnv{}) {
 		t.Errorf("Sweep.Env = %+v, want empty under the empty prefix", s.Env)
 	}
@@ -509,6 +516,8 @@ func TestSweep_MergeOverlaysSetFields(t *testing.T) {
 	overlay.Sweep.PendingBlobs.StaleAge = new(libconfig.Duration(2 * time.Hour))
 	overlay.Sweep.OrphanBlobs.Budget = new(30)
 	overlay.Sweep.OrphanBlobs.StaleAge = new(libconfig.Duration(48 * time.Hour))
+	overlay.Sweep.OutboxMessages.Budget = new(40)
+	overlay.Sweep.InboxMessages.Age = new(libconfig.Duration(72 * time.Hour))
 
 	base.Merge(overlay)
 
@@ -525,6 +534,12 @@ func TestSweep_MergeOverlaysSetFields(t *testing.T) {
 	if s.OrphanBlobs.Interval != nil || *s.OrphanBlobs.Budget != 30 || s.OrphanBlobs.StaleAge.Duration() != 48*time.Hour {
 		t.Errorf("OrphanBlobs = {%v %d %s}, want {unset 30 48h}", s.OrphanBlobs.Interval, *s.OrphanBlobs.Budget, s.OrphanBlobs.StaleAge)
 	}
+	if o := s.OutboxMessages; o.Interval != nil || *o.Budget != 40 || o.Age != nil {
+		t.Errorf("OutboxMessages = {%v %d %v}, want {unset 40 unset}", o.Interval, *o.Budget, o.Age)
+	}
+	if i := s.InboxMessages; i.Interval != nil || i.Budget != nil || i.Age.Duration() != 72*time.Hour {
+		t.Errorf("InboxMessages = {%v %v %s}, want {unset unset 72h}", i.Interval, i.Budget, i.Age)
+	}
 }
 
 func TestSweep_FinalizeEnvOverrides(t *testing.T) {
@@ -536,6 +551,12 @@ func TestSweep_FinalizeEnvOverrides(t *testing.T) {
 	t.Setenv("MIKOSHI_SWEEP_ORPHAN_BLOBS_INTERVAL", "2h")
 	t.Setenv("MIKOSHI_SWEEP_ORPHAN_BLOBS_BUDGET", "9")
 	t.Setenv("MIKOSHI_SWEEP_ORPHAN_BLOBS_STALE_AGE", "72h")
+	t.Setenv("MIKOSHI_SWEEP_OUTBOX_MESSAGES_INTERVAL", "1m")
+	t.Setenv("MIKOSHI_SWEEP_OUTBOX_MESSAGES_BUDGET", "11")
+	t.Setenv("MIKOSHI_SWEEP_OUTBOX_MESSAGES_AGE", "24h")
+	t.Setenv("MIKOSHI_SWEEP_INBOX_MESSAGES_INTERVAL", "3m")
+	t.Setenv("MIKOSHI_SWEEP_INBOX_MESSAGES_BUDGET", "13")
+	t.Setenv("MIKOSHI_SWEEP_INBOX_MESSAGES_AGE", "336h")
 
 	cfg := configtest.Minimal()
 	if err := cfg.Finalize("mikoshi"); err != nil {
@@ -558,6 +579,12 @@ func TestSweep_FinalizeEnvOverrides(t *testing.T) {
 	if got := s.OrphanBlobs.StaleAge.Duration(); got != 72*time.Hour {
 		t.Errorf("OrphanBlobs.StaleAge = %s, want 72h", got)
 	}
+	if got := s.OutboxMessages; got.Interval.Duration() != time.Minute || *got.Budget != 11 || got.Age.Duration() != 24*time.Hour {
+		t.Errorf("OutboxMessages = {%s %d %s}, want {1m 11 24h}", got.Interval, *got.Budget, got.Age)
+	}
+	if got := s.InboxMessages; got.Interval.Duration() != 3*time.Minute || *got.Budget != 13 || got.Age.Duration() != 336*time.Hour {
+		t.Errorf("InboxMessages = {%s %d %s}, want {3m 13 336h}", got.Interval, *got.Budget, got.Age)
+	}
 	want := config.SweepEnv{
 		ExpiredUploadsInterval: "MIKOSHI_SWEEP_EXPIRED_UPLOADS_INTERVAL",
 		ExpiredUploadsBudget:   "MIKOSHI_SWEEP_EXPIRED_UPLOADS_BUDGET",
@@ -567,6 +594,12 @@ func TestSweep_FinalizeEnvOverrides(t *testing.T) {
 		OrphanBlobsInterval:    "MIKOSHI_SWEEP_ORPHAN_BLOBS_INTERVAL",
 		OrphanBlobsBudget:      "MIKOSHI_SWEEP_ORPHAN_BLOBS_BUDGET",
 		OrphanBlobsStaleAge:    "MIKOSHI_SWEEP_ORPHAN_BLOBS_STALE_AGE",
+		OutboxMessagesInterval: "MIKOSHI_SWEEP_OUTBOX_MESSAGES_INTERVAL",
+		OutboxMessagesBudget:   "MIKOSHI_SWEEP_OUTBOX_MESSAGES_BUDGET",
+		OutboxMessagesAge:      "MIKOSHI_SWEEP_OUTBOX_MESSAGES_AGE",
+		InboxMessagesInterval:  "MIKOSHI_SWEEP_INBOX_MESSAGES_INTERVAL",
+		InboxMessagesBudget:    "MIKOSHI_SWEEP_INBOX_MESSAGES_BUDGET",
+		InboxMessagesAge:       "MIKOSHI_SWEEP_INBOX_MESSAGES_AGE",
 	}
 	if s.Env != want {
 		t.Errorf("Sweep.Env = %+v, want %+v", s.Env, want)
@@ -588,6 +621,11 @@ func TestSweep_FinalizeRejectsInvalidPolicy(t *testing.T) {
 		"orphan blobs interval zero":             {"MIKOSHI_SWEEP_ORPHAN_BLOBS_INTERVAL", "0s", "orphan_blobs.interval"},
 		"orphan blobs budget zero":               {"MIKOSHI_SWEEP_ORPHAN_BLOBS_BUDGET", "0", "orphan_blobs.budget"},
 		"orphan blobs stale age negative":        {"MIKOSHI_SWEEP_ORPHAN_BLOBS_STALE_AGE", "-1h", "orphan_blobs.stale_age"},
+		"outbox messages interval zero":          {"MIKOSHI_SWEEP_OUTBOX_MESSAGES_INTERVAL", "0s", "outbox_messages.interval"},
+		"outbox messages budget zero":            {"MIKOSHI_SWEEP_OUTBOX_MESSAGES_BUDGET", "0", "outbox_messages.budget"},
+		"outbox messages age zero":               {"MIKOSHI_SWEEP_OUTBOX_MESSAGES_AGE", "0s", "outbox_messages.age"},
+		"inbox messages age negative":            {"MIKOSHI_SWEEP_INBOX_MESSAGES_AGE", "-1h", "inbox_messages.age"},
+		"inbox messages age not a duration":      {"MIKOSHI_SWEEP_INBOX_MESSAGES_AGE", "later", "MIKOSHI_SWEEP_INBOX_MESSAGES_AGE"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -602,5 +640,100 @@ func TestSweep_FinalizeRejectsInvalidPolicy(t *testing.T) {
 				t.Errorf("error = %v, want the sweep block wrap naming %s", err, tc.want)
 			}
 		})
+	}
+}
+
+func TestMessaging_FinalizeDefaults(t *testing.T) {
+	cfg := configtest.Minimal()
+	if err := cfg.Finalize(""); err != nil {
+		t.Fatalf("Finalize: %v", err)
+	}
+
+	m := cfg.Messaging
+	if m.Source != "mikoshi" {
+		t.Errorf("Messaging.Source = %q, want mikoshi", m.Source)
+	}
+	if got := m.RelayPoll.Duration(); got != messaging.DefaultRelayPoll {
+		t.Errorf("Messaging.RelayPoll = %s, want the %s default", got, messaging.DefaultRelayPoll)
+	}
+	if got := m.RelayTimeout.Duration(); got != messaging.DefaultRelayTimeout {
+		t.Errorf("Messaging.RelayTimeout = %s, want the %s default", got, messaging.DefaultRelayTimeout)
+	}
+}
+
+func TestMessaging_FinalizeEnvOverrides(t *testing.T) {
+	t.Setenv("MIKOSHI_MESSAGING_SOURCE", "mikoshi-test")
+	t.Setenv("MIKOSHI_MESSAGING_RELAY_POLL", "1s")
+	t.Setenv("MIKOSHI_MESSAGING_RELAY_TIMEOUT", "20s")
+
+	cfg := configtest.Minimal()
+	if err := cfg.Finalize("mikoshi"); err != nil {
+		t.Fatalf("Finalize: %v", err)
+	}
+
+	m := cfg.Messaging
+	if m.Source != "mikoshi-test" || m.RelayPoll.Duration() != time.Second || m.RelayTimeout.Duration() != 20*time.Second {
+		t.Errorf("Messaging = {%q %s %s}, want the MIKOSHI_MESSAGING_* values", m.Source, m.RelayPoll, m.RelayTimeout)
+	}
+}
+
+func TestMessaging_FinalizeRequiresSource(t *testing.T) {
+	cfg := configtest.Minimal()
+	cfg.Messaging.Source = ""
+	err := cfg.Finalize("")
+	if err == nil {
+		t.Fatal("Finalize accepted a config with no messaging source")
+	}
+	if !strings.Contains(err.Error(), "messaging:") || !strings.Contains(err.Error(), "source") {
+		t.Errorf("error = %v, want the messaging block wrap naming the source", err)
+	}
+}
+
+func TestNATS_FinalizeDefaults(t *testing.T) {
+	cfg := configtest.Minimal()
+	if err := cfg.Finalize(""); err != nil {
+		t.Fatalf("Finalize: %v", err)
+	}
+
+	if cfg.NATS.URL != nats.DefaultURL {
+		t.Errorf("NATS.URL = %q, want the %s default", cfg.NATS.URL, nats.DefaultURL)
+	}
+	if cfg.NATS.Owner != nil {
+		t.Errorf("NATS.Owner = %v, want unset", *cfg.NATS.Owner)
+	}
+}
+
+func TestNATS_FinalizeEnvOverrides(t *testing.T) {
+	t.Setenv("MIKOSHI_NATS_URL", "nats://127.0.0.1:4226")
+	t.Setenv("MIKOSHI_NATS_NAME", "mikoshi-test")
+	t.Setenv("MIKOSHI_NATS_STREAM", "MIKOSHI_TEST")
+	t.Setenv("MIKOSHI_NATS_PREFIX", "mikoshi.test")
+	t.Setenv("MIKOSHI_NATS_OWNER", "true")
+	t.Setenv("MIKOSHI_NATS_MAX_AGE", "24h")
+
+	cfg := configtest.Minimal()
+	if err := cfg.Finalize("mikoshi"); err != nil {
+		t.Fatalf("Finalize: %v", err)
+	}
+
+	n := cfg.NATS
+	if n.URL != "nats://127.0.0.1:4226" || n.Name != "mikoshi-test" || n.Stream != "MIKOSHI_TEST" || n.Prefix != "mikoshi.test" {
+		t.Errorf("NATS url, name, stream, prefix = %q, %q, %q, %q, want the MIKOSHI_NATS_* values", n.URL, n.Name, n.Stream, n.Prefix)
+	}
+	if n.Owner == nil || !*n.Owner || n.MaxAge.Duration() != 24*time.Hour {
+		t.Errorf("NATS owner, max_age = %v, %s, want true and 24h from MIKOSHI_NATS_*", n.Owner, n.MaxAge)
+	}
+}
+
+func TestNATS_FinalizeErrorIsUnlabelled(t *testing.T) {
+	t.Setenv("MIKOSHI_NATS_OWNER", "maybe")
+
+	cfg := configtest.Minimal()
+	err := cfg.Finalize("mikoshi")
+	if err == nil {
+		t.Fatal("Finalize accepted an unparsable MIKOSHI_NATS_OWNER")
+	}
+	if !strings.HasPrefix(err.Error(), "nats: config: ") {
+		t.Errorf("error = %v, want the provider's own nats: config: label alone", err)
 	}
 }

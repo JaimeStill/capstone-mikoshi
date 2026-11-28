@@ -26,7 +26,7 @@ func inDir(t *testing.T, files map[string]string) {
 }
 
 func TestLoad_ShutdownTimeoutIsTopLevelKey(t *testing.T) {
-	inDir(t, map[string]string{"config.json": `{"storage": {"container": "mikoshi"}, "database": {"name": "app"}, "shutdown_timeout": "3s"}`})
+	inDir(t, map[string]string{"config.json": `{"messaging": {"source": "mikoshi"}, "nats": {"stream": "MIKOSHI", "prefix": "mikoshi"}, "storage": {"container": "mikoshi"}, "database": {"name": "app"}, "shutdown_timeout": "3s"}`})
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -38,7 +38,7 @@ func TestLoad_ShutdownTimeoutIsTopLevelKey(t *testing.T) {
 }
 
 func TestLoad_ShutdownTimeoutDefaultsTo10s(t *testing.T) {
-	inDir(t, map[string]string{"config.json": `{"storage": {"container": "mikoshi"}, "database": {"name": "app"}}`})
+	inDir(t, map[string]string{"config.json": `{"messaging": {"source": "mikoshi"}, "nats": {"stream": "MIKOSHI", "prefix": "mikoshi"}, "storage": {"container": "mikoshi"}, "database": {"name": "app"}}`})
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -50,7 +50,7 @@ func TestLoad_ShutdownTimeoutDefaultsTo10s(t *testing.T) {
 }
 
 func TestLoad_EnvOverridesFileShutdownTimeout(t *testing.T) {
-	inDir(t, map[string]string{"config.json": `{"storage": {"container": "mikoshi"}, "database": {"name": "app"}, "shutdown_timeout": "3s"}`})
+	inDir(t, map[string]string{"config.json": `{"messaging": {"source": "mikoshi"}, "nats": {"stream": "MIKOSHI", "prefix": "mikoshi"}, "storage": {"container": "mikoshi"}, "database": {"name": "app"}, "shutdown_timeout": "3s"}`})
 	t.Setenv("MIKOSHI_SHUTDOWN_TIMEOUT", "4s")
 
 	cfg, err := config.Load()
@@ -73,7 +73,7 @@ func TestLoad_OverlayShutdownTimeout(t *testing.T) {
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			inDir(t, map[string]string{
-				"config.json":      `{"storage": {"container": "mikoshi"}, "database": {"name": "app"}, "shutdown_timeout": "3s"}`,
+				"config.json":      `{"messaging": {"source": "mikoshi"}, "nats": {"stream": "MIKOSHI", "prefix": "mikoshi"}, "storage": {"container": "mikoshi"}, "database": {"name": "app"}, "shutdown_timeout": "3s"}`,
 				"config.test.json": tc.overlay,
 			})
 			t.Setenv("MIKOSHI_ENV", "test")
@@ -107,7 +107,7 @@ func TestLoad_RejectsUnknownTopLevelKeys(t *testing.T) {
 
 func TestLoad_PasswordFromSecretsFile(t *testing.T) {
 	inDir(t, map[string]string{
-		"config.json":  `{"storage": {"container": "mikoshi"}, "database": {"name": "app", "user": "app"}}`,
+		"config.json":  `{"messaging": {"source": "mikoshi"}, "nats": {"stream": "MIKOSHI", "prefix": "mikoshi"}, "storage": {"container": "mikoshi"}, "database": {"name": "app", "user": "app"}}`,
 		"secrets.json": `{"database": {"password": "from-secrets"}}`,
 	})
 
@@ -125,7 +125,7 @@ func TestLoad_PasswordFromSecretsFile(t *testing.T) {
 
 func TestLoad_EnvOverridesSecretsPassword(t *testing.T) {
 	inDir(t, map[string]string{
-		"config.json":  `{"storage": {"container": "mikoshi"}, "database": {"name": "app"}}`,
+		"config.json":  `{"messaging": {"source": "mikoshi"}, "nats": {"stream": "MIKOSHI", "prefix": "mikoshi"}, "storage": {"container": "mikoshi"}, "database": {"name": "app"}}`,
 		"secrets.json": `{"database": {"password": "from-secrets"}}`,
 	})
 	t.Setenv("MIKOSHI_DATABASE_PASSWORD", "from-env")
@@ -141,7 +141,7 @@ func TestLoad_EnvOverridesSecretsPassword(t *testing.T) {
 
 func TestLoad_StorageKeyFromSecretsFile(t *testing.T) {
 	inDir(t, map[string]string{
-		"config.json":  `{"storage": {"container": "mikoshi", "account": "admin"}, "database": {"name": "app"}}`,
+		"config.json":  `{"messaging": {"source": "mikoshi"}, "nats": {"stream": "MIKOSHI", "prefix": "mikoshi"}, "storage": {"container": "mikoshi", "account": "admin"}, "database": {"name": "app"}}`,
 		"secrets.json": `{"storage": {"key": "from-secrets"}}`,
 	})
 
@@ -159,7 +159,7 @@ func TestLoad_StorageKeyFromSecretsFile(t *testing.T) {
 
 func TestLoad_EnvOverridesSecretsStorageKey(t *testing.T) {
 	inDir(t, map[string]string{
-		"config.json":  `{"storage": {"container": "mikoshi"}, "database": {"name": "app"}}`,
+		"config.json":  `{"messaging": {"source": "mikoshi"}, "nats": {"stream": "MIKOSHI", "prefix": "mikoshi"}, "storage": {"container": "mikoshi"}, "database": {"name": "app"}}`,
 		"secrets.json": `{"storage": {"key": "from-secrets"}}`,
 	})
 	t.Setenv("MIKOSHI_STORAGE_KEY", "from-env")
@@ -170,5 +170,31 @@ func TestLoad_EnvOverridesSecretsStorageKey(t *testing.T) {
 	}
 	if cfg.Storage.Key != "from-env" {
 		t.Errorf("Storage.Key = %q, want MIKOSHI_STORAGE_KEY's", cfg.Storage.Key)
+	}
+}
+
+func TestLoad_RepositoryConfigOwnsTheStream(t *testing.T) {
+	body, err := os.ReadFile(filepath.Join("..", "..", "config.json"))
+	if err != nil {
+		t.Fatalf("read the repository's config.json: %v", err)
+	}
+	inDir(t, map[string]string{"config.json": string(body)})
+	for _, name := range []string{"MESSAGING_SOURCE", "NATS_URL", "NATS_STREAM", "NATS_PREFIX", "NATS_OWNER", "NATS_MAX_AGE"} {
+		t.Setenv("MIKOSHI_"+name, "")
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Messaging.Source != "mikoshi" {
+		t.Errorf("Messaging.Source = %q, want mikoshi", cfg.Messaging.Source)
+	}
+	n := cfg.NATS
+	if n.Stream != "MIKOSHI" || n.Prefix != "mikoshi" {
+		t.Errorf("NATS stream, prefix = %q, %q, want MIKOSHI, mikoshi", n.Stream, n.Prefix)
+	}
+	if n.Owner == nil || !*n.Owner || n.MaxAge.Duration() != 168*time.Hour {
+		t.Errorf("NATS owner, max_age = %v, %s, want the stream's owner with a 168h max_age", n.Owner, n.MaxAge)
 	}
 }

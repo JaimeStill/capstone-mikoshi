@@ -9,10 +9,12 @@ import (
 	"fmt"
 	"uuid"
 
+	"github.com/standards-lab/go-core/event"
 	"github.com/standards-lab/go-web-sdk"
 	"github.com/standards-lab/sqlate"
 	"github.com/standards-lab/sqlate/query"
 
+	"github.com/JaimeStill/capstone-mikoshi/correlation"
 	"github.com/JaimeStill/capstone-mikoshi/data"
 )
 
@@ -21,6 +23,7 @@ var files embed.FS
 
 type store struct {
 	db        *data.Database
+	events    *Recorder
 	stmts     *query.Statements
 	findRows  query.Rows[Context]
 	children  query.Projection[Context]
@@ -33,11 +36,12 @@ type store struct {
 	delete    query.Statement
 }
 
-func newStore(db *data.Database) *store {
+func newStore(db *data.Database, events *Recorder) *store {
 	stmts := db.Catalog.MustCompile(files, "statements", db.Dialect())
 	scan := query.Scanner[Context]()
 	s := &store{
 		db:        db,
+		events:    events,
 		stmts:     stmts,
 		findRows:  stmts.Statement("find").Scan(scan),
 		children:  stmts.Statement("children").Project(scan),
@@ -90,11 +94,19 @@ func (s *store) listChildren(ctx context.Context, parentID string, q web.Query) 
 }
 
 func (s *store) setName(ctx context.Context, id, name string) (Context, error) {
-	renamed, _, err := s.rename.One(ctx, s.db, query.Args{"id": id, "name": name})
-	if errors.Is(err, sqlate.ErrUniqueViolation) {
-		return Context{}, fmt.Errorf("%w: %q", ErrNameTaken, name)
-	}
-	return renamed, err
+	return s.db.Transact(ctx, s.events.Emit(ctx, func(tx *sqlate.Tx, q *event.Queue) (Context, error) {
+		renamed, changed, err := s.rename.One(ctx, tx, query.Args{"id": id, "name": name})
+		if errors.Is(err, sqlate.ErrUniqueViolation) {
+			return Context{}, fmt.Errorf("%w: %q", ErrNameTaken, name)
+		}
+		if err != nil {
+			return Context{}, err
+		}
+		if changed {
+			raiseStored(ctx, q, ContextRenamed, renamed)
+		}
+		return renamed, nil
+	}), nil)
 }
 
 func (s *store) insert(ctx context.Context, c CreateContext) (Context, error) {
@@ -112,7 +124,7 @@ func (s *store) insert(ctx context.Context, c CreateContext) (Context, error) {
 		}
 		args["filter"] = string(raw)
 	}
-	return s.db.Transact(ctx, func(tx *sqlate.Tx) (Context, error) {
+	return s.db.Transact(ctx, s.events.Emit(ctx, func(tx *sqlate.Tx, q *event.Queue) (Context, error) {
 		if err := s.db.Lock(ctx, tx, data.LockContextTree); err != nil {
 			return Context{}, err
 		}
@@ -130,8 +142,12 @@ func (s *store) insert(ctx context.Context, c CreateContext) (Context, error) {
 		if errors.Is(err, sqlate.ErrUniqueViolation) {
 			return Context{}, fmt.Errorf("%w: %q under %s", ErrNameTaken, c.Name, c.ParentID)
 		}
-		return created, err
-	}, nil)
+		if err != nil {
+			return Context{}, err
+		}
+		raiseStored(ctx, q, ContextCreated, created)
+		return created, nil
+	}), nil)
 }
 
 func (s *store) resolveSubtree(ctx context.Context, id string) ([]Node, error) {
@@ -146,7 +162,7 @@ func (s *store) resolveSubtree(ctx context.Context, id string) ([]Node, error) {
 }
 
 func (s *store) relocate(ctx context.Context, id string, m MoveContext) (Context, error) {
-	return s.db.Transact(ctx, func(tx *sqlate.Tx) (Context, error) {
+	return s.db.Transact(ctx, s.events.Emit(ctx, func(tx *sqlate.Tx, q *event.Queue) (Context, error) {
 		if err := s.db.Lock(ctx, tx, data.LockContextTree); err != nil {
 			return Context{}, err
 		}
@@ -175,30 +191,40 @@ func (s *store) relocate(ctx context.Context, id string, m MoveContext) (Context
 		if m.Name != nil {
 			name = *m.Name
 		}
-		updated, _, err := s.move.One(ctx, tx, query.Args{"id": id, "parent_id": m.ParentID, "name": name})
+		updated, changed, err := s.move.One(ctx, tx, query.Args{"id": id, "parent_id": m.ParentID, "name": name})
 		if errors.Is(err, sqlate.ErrUniqueViolation) {
 			return Context{}, fmt.Errorf("%w: %q under %s", ErrNameTaken, name, m.ParentID)
 		}
-		return updated, err
-	}, nil)
+		if err != nil {
+			return Context{}, err
+		}
+		if changed {
+			raiseStored(ctx, q, ContextMoved, updated)
+		}
+		return updated, nil
+	}), nil)
 }
 
 func (s *store) remove(ctx context.Context, id string, confirm int64) error {
-	_, err := s.db.Transact(ctx, func(tx *sqlate.Tx) (int64, error) {
+	_, err := s.db.Transact(ctx, s.events.Emit(ctx, func(tx *sqlate.Tx, q *event.Queue) (struct{}, error) {
 		if err := s.db.Lock(ctx, tx, data.LockContextTree); err != nil {
-			return 0, err
+			return struct{}{}, err
 		}
 		n, err := s.size.One(ctx, tx, query.Args{"id": id})
 		if err != nil {
-			return 0, err
+			return struct{}{}, err
 		}
 		if n == 0 {
-			return 0, sql.ErrNoRows
+			return struct{}{}, sql.ErrNoRows
 		}
 		if descendants := n - 1; descendants != confirm {
-			return 0, &DescendantsError{Count: descendants}
+			return struct{}{}, &DescendantsError{Count: descendants}
 		}
-		return s.delete.Exec(ctx, tx, query.Args{"id": id})
-	}, nil)
+		if _, err := s.delete.Exec(ctx, tx, query.Args{"id": id}); err != nil {
+			return struct{}{}, err
+		}
+		ContextDeleted.Raise(q, id, ContextDeletedData{ID: id}, correlation.RaiseOptions(ctx))
+		return struct{}{}, nil
+	}), nil)
 	return err
 }

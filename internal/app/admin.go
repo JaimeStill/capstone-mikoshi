@@ -7,7 +7,9 @@ import (
 	"github.com/standards-lab/go-core/graph"
 	"github.com/standards-lab/go-core/reactor"
 	"github.com/standards-lab/go-database/admin"
+	msgpg "github.com/standards-lab/go-messaging/postgres"
 	"github.com/standards-lab/go-web-sdk"
+	"github.com/standards-lab/sqlate"
 	"github.com/standards-lab/sqlate/migrate"
 	"github.com/standards-lab/sqlate/postgres/pgvector"
 
@@ -42,7 +44,11 @@ func (n *Nodes) newSchema(s *graph.Scope) (*Schema, error) {
 	sql := s.Use(n.SQL)
 	logger := s.Use(n.Logger)
 
-	migrator, err := migrate.New(sql.DB, []migrate.Set{data.Migrations()}, migrate.Options{
+	messagingSet, err := msgpg.Migrations()
+	if err != nil {
+		return nil, fmt.Errorf("messaging migrations: %w", err)
+	}
+	migrator, err := migrate.New(sql.DB, []migrate.Set{messagingSet, data.Migrations()}, migrate.Options{
 		Logger:     logger,
 		Extensions: []migrate.Extension{{Name: pgvector.Extension}},
 	})
@@ -50,18 +56,26 @@ func (n *Nodes) newSchema(s *graph.Scope) (*Schema, error) {
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
 
+	sql.Record(verifier(msgpg.Verify))
+
 	s.Use(n.Contexts)
 	s.Use(n.Uploads)
 	s.Use(n.Items)
 
 	return &Schema{
 		Service: admin.New(s.Use(n.Database), sql.DB, migrator, sql.Catalog, admin.Options{
+			Seeder:   data.Seeder{},
 			Registry: sql,
 			Logger:   logger,
+			OnReset:  dbadmin.OnReset(sql.DB, s.Use(n.Runtime).Recorder),
 		}),
 		sql: sql,
 	}, nil
 }
+
+type verifier func(ctx context.Context, sess sqlate.Session) error
+
+func (v verifier) Verify(ctx context.Context, sess sqlate.Session) error { return v(ctx, sess) }
 
 func mountAdmin(s *graph.Scope, n *Nodes) *web.Group {
 	g := web.NewGroup("/admin")

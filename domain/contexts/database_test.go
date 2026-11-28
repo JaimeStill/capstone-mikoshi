@@ -12,6 +12,8 @@ import (
 	"time"
 	"uuid"
 
+	"github.com/standards-lab/go-messaging/outbox"
+	msgpg "github.com/standards-lab/go-messaging/postgres"
 	"github.com/standards-lab/go-web-sdk"
 	"github.com/standards-lab/sqlate"
 	"github.com/standards-lab/sqlate/query"
@@ -19,6 +21,7 @@ import (
 
 	"github.com/JaimeStill/capstone-mikoshi/data"
 	"github.com/JaimeStill/capstone-mikoshi/domain/contexts"
+	"github.com/JaimeStill/capstone-mikoshi/internal/outboxtest"
 )
 
 const (
@@ -35,7 +38,16 @@ func service(t *testing.T, responses ...sqltest.Response) (*contexts.Service, *s
 	t.Helper()
 	pool, rec := sqltest.Open(t, responses...)
 	db := data.New(sqlate.Wrap(pool, sqltest.ReturningDialect{}), query.MustCatalog(query.Patterns()))
-	return contexts.New(db, fields), rec
+	return contexts.New(db, fields, recorder(t)), rec
+}
+
+func recorder(t *testing.T) *contexts.Recorder {
+	t.Helper()
+	ob, err := outbox.New(msgpg.Outbox())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return outboxtest.Stamped(ob.Sink())
 }
 
 var fields = []query.Field{
@@ -56,6 +68,8 @@ func root() sqltest.Response {
 }
 
 func treeLocked() sqltest.Response { return sqltest.Response{Affected: 0} }
+
+func eventWritten() sqltest.Response { return sqltest.Response{Affected: 1} }
 
 func sameOps(t *testing.T, rec *sqltest.Recorder, want ...sqltest.Op) {
 	t.Helper()
@@ -93,7 +107,7 @@ func TestService_FindUnknownIsNoRows(t *testing.T) {
 
 func TestService_CreateTakesTheTreeLockThenReadsTheParent(t *testing.T) {
 	filter := `[{"field":"kind","op":"eq","value":"pdf"}]`
-	s, rec := service(t, treeLocked(), root(), row(childID, contexts.Root, "q", contexts.KindQuery, []byte(filter)))
+	s, rec := service(t, treeLocked(), root(), row(childID, contexts.Root, "q", contexts.KindQuery, []byte(filter)), eventWritten())
 	c, err := s.Create(context.Background(), contexts.CreateContext{
 		ParentID: contexts.Root, Name: "q", Kind: contexts.KindQuery,
 		Filter: contexts.Filter{{Field: "kind", Op: query.OpEq, Value: []byte(`"pdf"`)}},
@@ -104,7 +118,7 @@ func TestService_CreateTakesTheTreeLockThenReadsTheParent(t *testing.T) {
 	if c.ID != childID || c.Kind != contexts.KindQuery || len(c.Filter) != 1 {
 		t.Errorf("Create = %+v", c)
 	}
-	sameOps(t, rec, begin, x, q, q, commit)
+	sameOps(t, rec, begin, x, q, q, x, commit)
 	calls := rec.Calls()
 	if lock := calls[1]; lock.SQL != "SELECT pg_advisory_xact_lock(hashtext($1))" || lock.Args[0] != data.LockContextTree {
 		t.Errorf("create did not take the tree lock first: %+v", lock)
@@ -126,7 +140,7 @@ func TestService_CreateTakesTheTreeLockThenReadsTheParent(t *testing.T) {
 }
 
 func TestService_CreateExplicitBindsNoFilter(t *testing.T) {
-	s, rec := service(t, treeLocked(), root(), row(childID, contexts.Root, "e", contexts.KindExplicit, nil))
+	s, rec := service(t, treeLocked(), root(), row(childID, contexts.Root, "e", contexts.KindExplicit, nil), eventWritten())
 	c, err := s.Create(context.Background(), contexts.CreateContext{ParentID: contexts.Root, Name: "e", Kind: contexts.KindExplicit})
 	if err != nil {
 		t.Fatal(err)
@@ -288,8 +302,8 @@ func TestService_ChildrenRefusals(t *testing.T) {
 	}
 }
 
-func TestService_RenameSetsTheNameInOneStatement(t *testing.T) {
-	s, rec := service(t, row(childID, contexts.Root, "renamed", contexts.KindExplicit, nil))
+func TestService_RenameSetsTheNameInItsTransaction(t *testing.T) {
+	s, rec := service(t, row(childID, contexts.Root, "renamed", contexts.KindExplicit, nil), eventWritten())
 	c, err := s.Rename(context.Background(), childID, contexts.RenameContext{Name: "renamed"})
 	if err != nil {
 		t.Fatal(err)
@@ -297,9 +311,9 @@ func TestService_RenameSetsTheNameInOneStatement(t *testing.T) {
 	if c.ID != childID || c.Name != "renamed" || c.ParentID == nil || *c.ParentID != contexts.Root {
 		t.Errorf("Rename = %+v", c)
 	}
-	sameOps(t, rec, q)
-	call := rec.Calls()[0]
-	if !strings.HasPrefix(call.SQL, "UPDATE context SET name = $1 WHERE id = CAST($2 AS uuid)") || call.Args[0] != "renamed" || call.Args[1] != childID {
+	sameOps(t, rec, begin, q, x, commit)
+	call := rec.Calls()[1]
+	if !strings.HasPrefix(call.SQL, "UPDATE context SET name = $1 WHERE id = CAST($2 AS uuid) AND name <> $1") || call.Args[0] != "renamed" || call.Args[1] != childID {
 		t.Errorf("rename = %+v", call)
 	}
 }
@@ -318,8 +332,8 @@ func TestService_RenameRefusals(t *testing.T) {
 		{"an empty name", childID, "", nil, contexts.ErrValidation, nil},
 		{"the root", contexts.Root, "n", nil, contexts.ErrRootFixed, nil},
 		{"the root in another spelling", "{" + contexts.Root + "}", "n", nil, contexts.ErrRootFixed, nil},
-		{"a sibling's name", childID, "n", []sqltest.Response{{Err: unique}}, contexts.ErrNameTaken, []sqltest.Op{q}},
-		{"an unknown context", childID, "n", []sqltest.Response{{Columns: []string{"id"}}, {Columns: []string{"id"}}}, sql.ErrNoRows, []sqltest.Op{q, q}},
+		{"a sibling's name", childID, "n", []sqltest.Response{{Err: unique}}, contexts.ErrNameTaken, []sqltest.Op{begin, q, rollback}},
+		{"an unknown context", childID, "n", []sqltest.Response{{Columns: []string{"id"}}, {Columns: []string{"id"}}}, sql.ErrNoRows, []sqltest.Op{begin, q, q, rollback}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -343,7 +357,8 @@ func TestService_MoveLocksReadsChecksTheCycleThenUpdates(t *testing.T) {
 		row(childID, contexts.Root, "kept", contexts.KindExplicit, nil),
 		row(parentID, contexts.Root, "folder", contexts.KindExplicit, nil),
 		count(0),
-		row(childID, parentID, "kept", contexts.KindExplicit, nil))
+		row(childID, parentID, "kept", contexts.KindExplicit, nil),
+		eventWritten())
 	c, err := s.Move(context.Background(), childID, contexts.MoveContext{ParentID: parentID})
 	if err != nil {
 		t.Fatal(err)
@@ -351,7 +366,7 @@ func TestService_MoveLocksReadsChecksTheCycleThenUpdates(t *testing.T) {
 	if c.ParentID == nil || *c.ParentID != parentID || c.Name != "kept" {
 		t.Errorf("Move = %+v", c)
 	}
-	sameOps(t, rec, begin, x, q, q, q, q, commit)
+	sameOps(t, rec, begin, x, q, q, q, q, x, commit)
 	calls := rec.Calls()
 	if lock := calls[1]; lock.SQL != "SELECT pg_advisory_xact_lock(hashtext($1))" || lock.Args[0] != data.LockContextTree {
 		t.Errorf("move did not take the tree lock first: %+v", lock)
@@ -373,7 +388,8 @@ func TestService_MoveWithANameSetsIt(t *testing.T) {
 		row(childID, contexts.Root, "old", contexts.KindExplicit, nil),
 		root(),
 		count(0),
-		row(childID, contexts.Root, "new", contexts.KindExplicit, nil))
+		row(childID, contexts.Root, "new", contexts.KindExplicit, nil),
+		eventWritten())
 	name := "new"
 	if _, err := s.Move(context.Background(), childID, contexts.MoveContext{ParentID: contexts.Root, Name: &name}); err != nil {
 		t.Fatal(err)
@@ -454,11 +470,11 @@ func TestService_SubtreeRefusals(t *testing.T) {
 }
 
 func TestService_DeleteLocksCountsThenDeletesTheSubtree(t *testing.T) {
-	s, rec := service(t, treeLocked(), count(4), sqltest.Response{Affected: 4})
+	s, rec := service(t, treeLocked(), count(4), sqltest.Response{Affected: 4}, eventWritten())
 	if err := s.Delete(context.Background(), childID, 3); err != nil {
 		t.Fatal(err)
 	}
-	sameOps(t, rec, begin, x, q, x, commit)
+	sameOps(t, rec, begin, x, q, x, x, commit)
 	calls := rec.Calls()
 	if lock := calls[1]; lock.SQL != "SELECT pg_advisory_xact_lock(hashtext($1))" || lock.Args[0] != data.LockContextTree {
 		t.Errorf("delete did not take the tree lock first: %+v", lock)
@@ -473,11 +489,11 @@ func TestService_DeleteLocksCountsThenDeletesTheSubtree(t *testing.T) {
 }
 
 func TestService_DeleteALeafNeedsNoConfirmation(t *testing.T) {
-	s, rec := service(t, treeLocked(), count(1), sqltest.Response{Affected: 1})
+	s, rec := service(t, treeLocked(), count(1), sqltest.Response{Affected: 1}, eventWritten())
 	if err := s.Delete(context.Background(), childID, 0); err != nil {
 		t.Fatal(err)
 	}
-	sameOps(t, rec, begin, x, q, x, commit)
+	sameOps(t, rec, begin, x, q, x, x, commit)
 }
 
 func TestService_DeleteRefusals(t *testing.T) {
@@ -520,7 +536,7 @@ func TestService_DeleteRefusals(t *testing.T) {
 func TestStore_RegistersAndVerifiesEveryStatement(t *testing.T) {
 	pool, rec := sqltest.Open(t)
 	db := data.New(sqlate.Wrap(pool, sqltest.ReturningDialect{}), query.MustCatalog(query.Patterns()))
-	contexts.New(db, fields)
+	contexts.New(db, fields, recorder(t))
 
 	var entry *query.Statements
 	for _, e := range db.Registry() {
@@ -555,11 +571,11 @@ func TestStore_RegistersAndVerifiesEveryStatement(t *testing.T) {
 func TestNew_TwiceOverOneDatabaseIsAWiringDefect(t *testing.T) {
 	pool, _ := sqltest.Open(t)
 	db := data.New(sqlate.Wrap(pool, sqltest.ReturningDialect{}), query.MustCatalog(query.Patterns()))
-	contexts.New(db, fields)
+	contexts.New(db, fields, recorder(t))
 	defer func() {
 		if recover() == nil {
 			t.Fatal("a second contexts service registered its statements again")
 		}
 	}()
-	contexts.New(db, fields)
+	contexts.New(db, fields, recorder(t))
 }

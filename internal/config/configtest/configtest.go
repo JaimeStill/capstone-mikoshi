@@ -17,13 +17,17 @@ func Minimal() *config.Config {
 	cfg := &config.Config{}
 	cfg.Database.Name = "app"
 	cfg.Storage.Container = "mikoshi"
+	cfg.Messaging.Source = "mikoshi"
+	cfg.NATS.Stream = "MIKOSHI"
+	cfg.NATS.Prefix = "mikoshi"
 	return cfg
 }
 
 // Config returns a finalized Config whose composition performs no I/O: the
 // server on a loopback ephemeral port, debug logging so requests leave
-// records, and the database and the object store each aimed at a closed
-// loopback port, so a dial is refused immediately instead of timing out.
+// records, and the database, the object store, and the NATS server each
+// aimed at a closed loopback port, so a dial is refused immediately
+// instead of timing out.
 // The empty prefix disables environment overrides.
 func Config(t *testing.T) *config.Config {
 	t.Helper()
@@ -38,6 +42,7 @@ func Config(t *testing.T) *config.Config {
 	cfg.Storage.Endpoint = "http://" + net.JoinHostPort("127.0.0.1", strconv.Itoa(ClosedPort(t)))
 	cfg.Storage.Account = "admin"
 	cfg.Storage.Key = "secret"
+	cfg.NATS.URL = "nats://" + net.JoinHostPort("127.0.0.1", strconv.Itoa(ClosedPort(t)))
 	if err := cfg.Finalize(""); err != nil {
 		t.Fatalf("finalize hermetic config: %v", err)
 	}

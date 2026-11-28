@@ -5,7 +5,8 @@
 //
 //   - infrastructure.go: defineInfrastructure, the lifecycle configuration
 //     and the services the application is composed on (the logger, the
-//     database pool, the object store, and the sql node over the pool);
+//     database pool, the object store, the broker, and the sql node over
+//     the pool);
 //   - admin.go: defineAdmin, the quiesce gate and the administrative
 //     services, and their /admin mount;
 //   - domain.go: defineDomain, the domain services, and their /api mount;
@@ -71,7 +72,9 @@
 // session wrapped in sqlate's PostgreSQL dialect and grouped with the
 // pattern catalog as a data.Database; and the storage, go-storage's Store
 // over the client its s3 provider constructs from the configuration's
-// storage block. Each service is its own node, with any order it needs
+// storage block; and the broker, go-messaging's NATS JetStream broker its
+// nats provider constructs from the configuration's nats block, the owner
+// of Mikoshi's stream. Each service is its own node, with any order it needs
 // declared on its Define line. The composition root is the only package
 // that imports a provider: the admin service receives the pool as a
 // go-database database.DB, the domains receive the sql node's
@@ -83,7 +86,11 @@
 // probes it, so an unreachable gateway fails startup with an error naming
 // the storage node; its Ready probes the bucket live and joins the
 // readiness probe under the storage's name, so an outage after startup
-// makes the service not ready without ending it. A service
+// makes the service not ready without ending it. The broker's Start
+// connects to the NATS server and creates the stream or updates it to the
+// nats block, so an unreachable server fails startup with an error naming
+// the broker node; its Ready joins the readiness probe under the broker's
+// name. A service
 // whose value implements lifecycle.Subsystem takes part in startup and
 // shutdown through its own methods, and its constructor opens nothing:
 // connectivity belongs to its Start, so a failed Build leaks no
@@ -98,17 +105,22 @@
 // /admin group, with its service and the logger for its error writer read
 // with Use. Mikoshi's one admin domain is the schema: go-database's admin
 // service over the pool, a sqlate session wrapped in the PostgreSQL
-// dialect, and a migrator over data.Migrations that declares pgvector by
-// name only, with no seeder and no seed state, and the sql node's
-// statements registry as its inventory. The node's value is a [Schema],
-// which Uses every domain node so each has registered its statements
-// before it is built. Its Start installs the version of pgvector the image
-// offers, failing before any migration when the image offers none, then
-// applies the set, then prepares every registered statement against the
-// migrated schema (data.Database.Verify), so a statement that does not fit
-// fails startup with an error naming the schema node and the statement;
-// its Ready joins the readiness probe under the schema's name, false while
-// a migration or the declaration is pending or mismatched. Its route group, the admin/database
+// dialect, and a migrator over go-messaging's postgres migration set,
+// beneath Mikoshi's own, and data.Migrations, that declares pgvector by
+// name only, with data.Seeder, whose one state, empty, writes nothing, and
+// no startup seed, the sql node's statements registry as its inventory, and
+// admin/database's OnReset over the runtime node's recorder as its reset
+// hook, so a reset commits mikoshi.database.reset. The node's value is a
+// [Schema], which Uses every domain node so each has registered its
+// statements before it is built. Its Start installs the version of pgvector
+// the image offers, failing before any migration when the image offers
+// none, then applies the set, then prepares every registered statement
+// against the migrated schema (data.Database.Verify), go-messaging's outbox
+// and inbox statements among them, recorded on the sql node beside the
+// migration set, so a statement that does not fit fails startup with an
+// error naming the schema node and the statement; its Ready joins the
+// readiness probe under the schema's name, false while a migration or the
+// declaration is pending or mismatched. Its route group, the admin/database
 // package's /database, mounts into the /admin group over the schema node
 // and the gate node, so the server reaches the schema through the router.
 // The gate is a fresh go-core reactor.Gate, the process's quiesce gate:
@@ -129,11 +141,13 @@
 // handler handed, at the construction site, its service, its policy from
 // the config node (cfg.Reads.Limits() for a collection read), and the
 // logger for its error writer (web.NewErrorWriter(logger, ...)). Mikoshi's
-// domain layers are contexts, the context tree, built over the sql node and
+// domain layers are contexts, the context tree, built over the sql node,
 // the items layer's FilterFields, the field contract its query filters are
-// checked against, and mounted at /api/contexts; uploads, the resumable
+// checked against, and the runtime's Recorder, which its commands emit
+// their events through, and mounted at /api/contexts; uploads, the resumable
 // uploads in progress, built over the sql node; and items, built over the
-// sql node, the storage node, and the contexts node and mounted at
+// sql node, the storage node, the contexts node, and the runtime's
+// Recorder, which its commands emit their events through, and mounted at
 // /api/items, each read with the read limits allowing a cursor. The items
 // layer's reference group mounts at /api/contexts beside the contexts
 // layer's group, its routes under /api/contexts/{id}/items, the covered
@@ -161,7 +175,13 @@
 // context ends. The Coordinator infers from the value's methods that the
 // reactor starts with its layer, drains before the nodes it uses, joins
 // the readiness probe under its node's name, and ends the run on its
-// failure. Mikoshi's one reactor is the sweeper, go-database's
+// failure. Mikoshi has two reactors. The relay is the reactor the runtime
+// node builds: go-messaging's Runtime over the broker and its postgres
+// engine's outbox and inbox statements, whose Recorder stamps the layer
+// extension, mikoshi, on every event a domain emits. The relay orders
+// itself after the schema, publishes each committed outbox row to the
+// broker, and holds the gate shared for each row, so it pauses while an
+// admin verb holds the gate. The sweeper is go-database's
 // sweep.Sweeper, a reactor of the same shape over a reactor.Wake: it
 // orders itself after the schema, so it starts over the migrated schema,
 // holds the gate shared for each pass, and runs the domains' reclaimers,
@@ -173,7 +193,10 @@
 // orphan_blobs, the items layer's OrphanReclaimer, which removes an
 // available blob no item has named past the block's stale age, its
 // object, and the content's source occurrences, sources, chunks, and
-// embeddings that nothing else names.
+// embeddings that nothing else names; outbox_messages, go-messaging's
+// outbox retention, which removes the published outbox rows past the
+// block's age; and inbox_messages, its inbox retention, which removes the
+// handled inbox rows past the block's age.
 //
 // The request edge's readiness is a fresh node, so each Build's starts
 // unbound, ready for the Coordinator that Build's System is handed to. The

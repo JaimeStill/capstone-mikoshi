@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -50,7 +51,7 @@ func gatedModule(t *testing.T, gate database.SchemaGate, responses ...sqltest.Re
 	if err != nil {
 		t.Fatal(err)
 	}
-	svc := admin.New(pdb, sdb, m, query.MustCatalog(query.Patterns()), admin.Options{})
+	svc := admin.New(pdb, sdb, m, query.MustCatalog(query.Patterns()), admin.Options{Seeder: data.Seeder{}})
 	r := web.NewRouter()
 	r.Mount(web.NewModule(database.Routes(svc, gate, slog.New(slog.DiscardHandler))))
 	return r, rec
@@ -129,24 +130,33 @@ func TestSchema_ReportsAnEmptyHistoryAsPending(t *testing.T) {
 	}
 }
 
-func TestStates_ListsNone(t *testing.T) {
+func TestStates_ListsEmptyAlone(t *testing.T) {
 	h, rec := module(t)
 	res := send(t, h, "GET", "/database/states", "")
 	var states []string
-	if err := json.Unmarshal(res.Body.Bytes(), &states); err != nil || res.Code != 200 || states == nil || len(states) != 0 {
-		t.Errorf("states = %d %s; want an empty list", res.Code, res.Body)
+	if err := json.Unmarshal(res.Body.Bytes(), &states); err != nil || res.Code != 200 || !slices.Equal(states, []string{"empty"}) {
+		t.Errorf("states = %d %s; want [\"empty\"]", res.Code, res.Body)
 	}
 	if len(rec.Calls()) != 0 {
 		t.Errorf("the states read touched the database: %v", rec.Ops())
 	}
 }
 
-func TestSeedAndState_AreForbiddenWithNoStates(t *testing.T) {
+func TestSeed_EmptyWritesNothing(t *testing.T) {
+	h, rec := module(t)
+	body := decode(t, send(t, h, "POST", "/database/seed", `{"state":"empty"}`), http.StatusOK)
+	if len(body) != 0 {
+		t.Errorf("seeded = %v; want no rows counted", body)
+	}
+	if calls := rec.Calls(); len(calls) != 0 {
+		t.Errorf("seeding empty reached the database: %v", calls)
+	}
+}
+
+func TestSeedAndState_AreForbiddenWithNoStateNamed(t *testing.T) {
 	h, rec := module(t)
 	for _, c := range []struct{ path, body string }{
 		{"/database/seed", ""},
-		{"/database/seed", `{"state":"default"}`},
-		{"/database/state", `{"state":"default","confirm":true}`},
 		{"/database/state", `{"confirm":true}`},
 	} {
 		res := send(t, h, "POST", c.path, c.body)
@@ -160,6 +170,19 @@ func TestSeedAndState_AreForbiddenWithNoStates(t *testing.T) {
 	}
 	if calls := rec.Calls(); len(calls) != 0 {
 		t.Errorf("a forbidden verb reached the database: %v", calls)
+	}
+}
+
+func TestSeedAndState_RefuseAnUndeclaredState(t *testing.T) {
+	h, rec := module(t)
+	for _, c := range []struct{ path, body string }{
+		{"/database/seed", `{"state":"default"}`},
+		{"/database/state", `{"state":"default","confirm":true}`},
+	} {
+		decode(t, send(t, h, "POST", c.path, c.body), http.StatusBadRequest)
+	}
+	if calls := rec.Calls(); len(calls) != 0 {
+		t.Errorf("a refused verb reached the database: %v", calls)
 	}
 }
 
@@ -306,7 +329,7 @@ func TestVerbs_ChangingTheSchemaHoldTheGate(t *testing.T) {
 		"/database/schema/up":    "",
 		"/database/schema/down":  `{"set":"app"}`,
 		"/database/schema/steps": `{"set":"app","steps":1}`,
-		"/database/state":        `{"state":"default","confirm":true}`,
+		"/database/state":        `{"state":"empty","confirm":true}`,
 	} {
 		if code := sendWithin(t, h, 30*time.Millisecond, path, body).Code; code != http.StatusInternalServerError {
 			t.Errorf("%s under a shared holder = %d, want the abandoned wait's 500", path, code)

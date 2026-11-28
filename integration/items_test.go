@@ -87,6 +87,12 @@ func (c *counting) count(method string) int {
 
 func uploadFile(t *testing.T, s *integration.Service, rt *counting, chunk int64, name, mediaType string, content []byte) items.Item {
 	t.Helper()
+	item, _ := completeUpload(t, s, rt, chunk, name, mediaType, content)
+	return item
+}
+
+func completeUpload(t *testing.T, s *integration.Service, rt *counting, chunk int64, name, mediaType string, content []byte) (items.Item, http.Header) {
+	t.Helper()
 	if rt == nil {
 		rt = &counting{}
 	}
@@ -118,7 +124,7 @@ func uploadFile(t *testing.T, s *integration.Service, rt *counting, chunk int64,
 	if !strings.Contains(string(body), `"duration":null`) {
 		t.Errorf("body %s, want a null duration", body)
 	}
-	return item
+	return item, res.Header
 }
 
 func objectOf(t *testing.T, bucket storage.Client, digest string) []byte {
@@ -422,34 +428,10 @@ func TestItems_OverlappingCompletionsCreateOneItem(t *testing.T) {
 		)
 		for range requests {
 			wg.Go(func() {
-				req, err := http.NewRequestWithContext(t.Context(), http.MethodPatch, location, http.NoBody)
-				if err != nil {
-					t.Error(err)
-					return
-				}
-				req.Header.Set("Content-Type", "application/partial-upload")
-				req.Header.Set("Upload-Offset", strconv.Itoa(len(content)))
-				req.Header.Set("Upload-Complete", "?1")
-				res, err := http.DefaultClient.Do(req)
-				if err != nil {
-					t.Error(err)
-					return
-				}
-				defer func() { _ = res.Body.Close() }()
-				body, _ := io.ReadAll(res.Body)
-				switch res.StatusCode {
-				case http.StatusCreated:
-					var item items.Item
-					if err := json.Unmarshal(body, &item); err != nil {
-						t.Errorf("decode %s: %v", body, err)
-						return
-					}
+				if id := completeAt(t, location, len(content)); id != "" {
 					mu.Lock()
-					created = append(created, item.ID)
+					created = append(created, id)
 					mu.Unlock()
-				case http.StatusNotFound:
-				default:
-					t.Errorf("completion = %d %s, want 201 or, once the upload is deleted, 404", res.StatusCode, body)
 				}
 			})
 		}
@@ -467,7 +449,7 @@ func itemService(t *testing.T) (*items.Service, *pgtest.Database) {
 	t.Helper()
 	db := integration.Migrated(t)
 	d := data.New(db.Session(), query.MustCatalog(query.Patterns()))
-	s := items.New(d, integration.Objects(t, bucketName()), contexts.New(d, items.FilterFields(d)))
+	s := items.New(d, integration.Objects(t, bucketName()), contexts.New(d, items.FilterFields(d), nil), integration.Recorder(t))
 	if err := d.Verify(t.Context()); err != nil {
 		t.Fatalf("verify the items statements: %v", err)
 	}
@@ -982,4 +964,140 @@ func TestItems_DeleteRemovesTheItemAndItsReferences(t *testing.T) {
 	if n := countRows(t, db, "SELECT COUNT(*) FROM item"); n != 1 {
 		t.Errorf("items = %d, want the other one", n)
 	}
+}
+
+func itemData(i items.Item) map[string]any {
+	return map[string]any{
+		"id": i.ID, "type": i.Type, "name": i.Name, "media_type": i.MediaType, "sha256": i.SHA256,
+		"size": i.Size, "route": i.Route, "kind": i.Kind, "duration": i.Duration,
+	}
+}
+
+func TestItems_CommandsPublishTheirEvents(t *testing.T) {
+	s := integration.Start(t, integration.Options{Env: []string{"MIKOSHI_STORAGE_CONTAINER=" + bucketName()}})
+	c := s.Client()
+	stream := integration.Subscribe(t, items.ItemCreated.Type(), items.ItemDeleted.Type(), items.ContextItemAdded.Type(), items.ContextItemRemoved.Type())
+
+	res := c.Post(t, "/api/items", `{"name":"published"}`, recordName("published.json"))
+	record := webtest.Decode[items.Item](t, res, http.StatusCreated)
+	wantEvent(t, stream.AwaitType(t, items.ItemCreated.Type(), record.ID), requestIDOf(t, res.Header), itemData(record))
+	if record.Type != items.TypeRecord {
+		t.Errorf("record type = %q, want record", record.Type)
+	}
+
+	file, header := completeUpload(t, s, nil, 0, "published.pdf", "application/pdf", pdfOf(4096, "published"))
+	wantEvent(t, stream.AwaitType(t, items.ItemCreated.Type(), file.ID), requestIDOf(t, header), itemData(file))
+	if file.Type != items.TypeFile {
+		t.Errorf("file type = %q, want file", file.Type)
+	}
+
+	folder := createContext(t, c, explicit(contexts.Root, "folder"))
+	reference := map[string]any{"context_id": folder.ID, "item_id": record.ID}
+	path := referencePath(folder.ID, record.ID)
+	res = c.Put(t, path, nil).Expect(t, http.StatusNoContent)
+	wantEvent(t, stream.AwaitType(t, items.ContextItemAdded.Type(), folder.ID), requestIDOf(t, res.Header), reference)
+	res = c.Delete(t, path).Expect(t, http.StatusNoContent)
+	wantEvent(t, stream.AwaitType(t, items.ContextItemRemoved.Type(), folder.ID), requestIDOf(t, res.Header), reference)
+
+	c.Put(t, referencePath(folder.ID, file.ID), nil).Expect(t, http.StatusNoContent)
+	stream.AwaitType(t, items.ContextItemAdded.Type(), folder.ID)
+	res = c.Delete(t, "/api/items/"+file.ID).Expect(t, http.StatusNoContent)
+	wantEvent(t, stream.AwaitType(t, items.ItemDeleted.Type(), file.ID), requestIDOf(t, res.Header), map[string]any{"id": file.ID})
+
+	var removed int
+	for _, e := range stream.Received() {
+		if e.Type == items.ContextItemRemoved.Type() {
+			removed++
+		}
+	}
+	if removed != 1 {
+		t.Errorf("removed events = %d; want the one withdrawing, and none for the reference the delete took", removed)
+	}
+}
+
+func TestItems_CommandsThatChangeNothingPublishNothing(t *testing.T) {
+	s := integration.Start(t, integration.Options{Env: []string{"MIKOSHI_STORAGE_CONTAINER=" + bucketName()}})
+	c := s.Client()
+	stream := integration.Subscribe(t, items.ItemCreated.Type(), items.ContextItemAdded.Type(), items.ContextItemRemoved.Type())
+
+	item := postRecord(t, c, "unchanged")
+	stream.AwaitType(t, items.ItemCreated.Type(), item.ID)
+	folder := createContext(t, c, explicit(contexts.Root, "folder"))
+	path := referencePath(folder.ID, item.ID)
+	c.Put(t, path, nil).Expect(t, http.StatusNoContent)
+	stream.AwaitType(t, items.ContextItemAdded.Type(), folder.ID)
+	c.Put(t, path, nil).Expect(t, http.StatusNoContent)
+	c.Delete(t, path).Expect(t, http.StatusNoContent)
+	stream.AwaitType(t, items.ContextItemRemoved.Type(), folder.ID)
+	c.Delete(t, path).Expect(t, http.StatusNoContent)
+	c.Put(t, referencePath(folder.ID, uuid.NewV7().String()), nil).Expect(t, http.StatusNotFound)
+
+	content := []byte("completed more than once\n")
+	location := completing(t, s, content)
+	var (
+		wg      sync.WaitGroup
+		mu      sync.Mutex
+		created []string
+	)
+	for range 4 {
+		wg.Go(func() {
+			if id := completeAt(t, location, len(content)); id != "" {
+				mu.Lock()
+				created = append(created, id)
+				mu.Unlock()
+			}
+		})
+	}
+	wg.Wait()
+	if len(created) == 0 {
+		t.Fatal("no completion created the item")
+	}
+
+	marker := postRecord(t, c, "marker")
+	got := stream.Await(t, marker.ID)
+	counts := map[string]int{}
+	for _, e := range got {
+		counts[e.Type+" "+e.Subject]++
+	}
+	for key, want := range map[string]int{
+		items.ContextItemAdded.Type() + " " + folder.ID:   1,
+		items.ContextItemRemoved.Type() + " " + folder.ID: 1,
+		items.ItemCreated.Type() + " " + item.ID:          1,
+		items.ItemCreated.Type() + " " + created[0]:       1,
+	} {
+		if counts[key] != want {
+			t.Errorf("%s published %d times; want %d", key, counts[key], want)
+		}
+	}
+}
+
+func completeAt(t *testing.T, location string, offset int) string {
+	t.Helper()
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPatch, location, http.NoBody)
+	if err != nil {
+		t.Error(err)
+		return ""
+	}
+	req.Header.Set("Content-Type", "application/partial-upload")
+	req.Header.Set("Upload-Offset", strconv.Itoa(offset))
+	req.Header.Set("Upload-Complete", "?1")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Error(err)
+		return ""
+	}
+	defer func() { _ = res.Body.Close() }()
+	body, _ := io.ReadAll(res.Body)
+	switch res.StatusCode {
+	case http.StatusCreated:
+		var item items.Item
+		if err := json.Unmarshal(body, &item); err != nil {
+			t.Errorf("decode %s: %v", body, err)
+		}
+		return item.ID
+	case http.StatusNotFound:
+		return ""
+	}
+	t.Errorf("completion = %d %s, want 201 or, once the upload is deleted, 404", res.StatusCode, body)
+	return ""
 }

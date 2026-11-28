@@ -8,6 +8,7 @@ import (
 	"github.com/standards-lab/go-core/logging"
 	"github.com/standards-lab/go-database"
 	"github.com/standards-lab/go-database/postgres"
+	"github.com/standards-lab/go-messaging/nats"
 	"github.com/standards-lab/go-storage"
 	"github.com/standards-lab/go-storage/s3"
 	"github.com/standards-lab/sqlate"
@@ -22,6 +23,7 @@ func defineInfrastructure(g *graph.Graph, n *Nodes) {
 	n.Logger = g.Define("logger", n.newLogger)
 	n.Database = g.Define("database", n.newDatabase)
 	n.Storage = g.Define("storage", n.newStorage)
+	n.Broker = g.Define("broker", n.newBroker)
 	n.SQL = g.Define("sql", n.newSQL)
 }
 
@@ -44,6 +46,10 @@ func (n *Nodes) newStorage(s *graph.Scope) (*storage.Store, error) {
 		return nil, err
 	}
 	return storage.New(client, cfg), nil
+}
+
+func (n *Nodes) newBroker(s *graph.Scope) (*nats.Broker, error) {
+	return nats.New(s.Use(n.Config).NATS)
 }
 
 func (n *Nodes) newSQL(s *graph.Scope) (*data.Database, error) {

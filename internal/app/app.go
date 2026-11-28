@@ -7,11 +7,14 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/standards-lab/go-core/event"
 	"github.com/standards-lab/go-core/graph"
 	"github.com/standards-lab/go-core/lifecycle"
 	"github.com/standards-lab/go-core/reactor"
 	"github.com/standards-lab/go-database"
 	"github.com/standards-lab/go-database/sweep"
+	"github.com/standards-lab/go-messaging"
+	"github.com/standards-lab/go-messaging/nats"
 	"github.com/standards-lab/go-storage"
 	"github.com/standards-lab/go-web-sdk"
 
@@ -45,20 +48,23 @@ type Nodes struct {
 
 	// Infrastructure (infrastructure.go): the database is the PostgreSQL
 	// pool, opened through go-database's provider; the storage is the
-	// object store, go-storage's Store over its s3 provider; the sql node
-	// is the pool's session grouped with the pattern catalog, the database
-	// as the admin service and the domains see it.
+	// object store, go-storage's Store over its s3 provider; the broker is
+	// go-messaging's NATS JetStream broker, the owner of Mikoshi's stream;
+	// the sql node is the pool's session grouped with the pattern catalog,
+	// the database as the admin service and the domains see it.
 	LifecycleConfig *graph.Node[lifecycle.Config]
 	Logger          *graph.Node[*slog.Logger]
 	Database        *graph.Node[*database.DB]
 	Storage         *graph.Node[*storage.Store]
+	Broker          *graph.Node[*nats.Broker]
 	SQL             *graph.Node[*data.Database]
 
 	// Admin (admin.go): the gate is the process's quiesce gate, which the
 	// schema-changing admin verbs hold exclusively; the schema is
-	// go-database's admin service over the pool, which migrates Mikoshi's
-	// set and reconciles its pgvector declaration at startup, then prepares
-	// every registered statement, and reports the schema's readiness.
+	// go-database's admin service over the pool, which migrates the
+	// messaging set and Mikoshi's own above it and reconciles its pgvector
+	// declaration at startup, then prepares every registered statement and
+	// the messaging set's, and reports the schema's readiness.
 	Gate   *graph.Node[*reactor.Gate]
 	Schema *graph.Node[*Schema]
 
@@ -73,9 +79,16 @@ type Nodes struct {
 	// A reactor is reached by no Use, so the group is one of [App.Roots],
 	// and the server orders itself after it so it stays the top layer.
 	// The sweeper is go-database's sweeper, which runs the domains'
-	// reclaimers, each on its policy from the configuration's sweep block.
+	// reclaimers and the outbox's and the inbox's retentions, each on its
+	// policy from the configuration's sweep block. The runtime is
+	// go-messaging's Runtime over the broker, whose Recorder stamps the
+	// layer on every event a domain emits; it is no reactor itself, but
+	// builds the relay, the reactor that publishes the committed outbox
+	// rows to the broker.
 	Reactors *graph.Group
 	Sweeper  *graph.Node[*sweep.Sweeper]
+	Runtime  *graph.Node[*messaging.Runtime]
+	Relay    *graph.Node[*reactor.Reactor[event.Event]]
 
 	// The request edge (server.go).
 	Readiness *graph.Node[*lifecycle.Readiness]

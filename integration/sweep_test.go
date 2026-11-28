@@ -42,7 +42,7 @@ func sweepDomains(t *testing.T) sweepFixture {
 	f := sweepFixture{
 		db:      db,
 		uploads: uploads.New(d),
-		items:   items.New(d, objects, contexts.New(d, items.FilterFields(d))),
+		items:   items.New(d, objects, contexts.New(d, items.FilterFields(d), nil), integration.Recorder(t)),
 		objects: objects,
 		bucket:  integration.Bucket(t, name),
 	}

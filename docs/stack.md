@@ -13,6 +13,12 @@ Mikoshi runs on one declared stack, with one provider per capability.
   [`compose/seaweedfs/Dockerfile`](../compose/seaweedfs/Dockerfile), or the capstone stack's
   gateway through `MIKOSHI_STORAGE_ENDPOINT=http://127.0.0.1:8335`. Mikoshi creates its bucket at
   startup.
+- Messaging: NATS with JetStream, through
+  [go-messaging](https://github.com/standards-lab/go-messaging)'s runtime, its `nats` provider
+  for the broker, and its `postgres` engine for the outbox and inbox tables. Locally it is the
+  NATS server the compose file builds from [`compose/nats/Dockerfile`](../compose/nats/Dockerfile),
+  on `127.0.0.1:4228`, or the capstone stack's through `MIKOSHI_NATS_URL=nats://127.0.0.1:4226`.
+  Mikoshi owns the stream `MIKOSHI`, which it creates or updates at startup.
 
 ## Standard and native tiers
 
@@ -24,9 +30,12 @@ features. Everything pgvector adds (the `vector` type, the `hnsw` index method, 
 Only these packages import a provider or use pgvector:
 
 - The composition root, `internal/app`. `infrastructure.go` opens the pool through go-database's
-  `postgres` provider, its `sql` node wraps the pool in sqlate's `postgres` dialect, and its
-  `storage` node wraps go-storage's `s3` client in a `storage.Store`. `admin.go` declares
-  pgvector to the migrator by name, from sqlate's `postgres/pgvector`.
+  `postgres` provider, its `sql` node wraps the pool in sqlate's `postgres` dialect, its
+  `storage` node wraps go-storage's `s3` client in a `storage.Store`, and its `broker` node is
+  go-messaging's `nats` broker. `admin.go` declares pgvector to the migrator by name, from
+  sqlate's `postgres/pgvector`, and declares go-messaging's `postgres` migration set beneath
+  Mikoshi's own. `reactors.go` builds the messaging runtime over the broker and go-messaging's
+  `postgres` statements, and the sweeper's two retentions from that engine.
 - The migrations, `data/migrations`, which create the `vector` column and space 1's HNSW index.
 - The admin domain, `admin/database`, through go-database's admin service alone: it reports
   pgvector's status in the schema status and imports no provider.
@@ -54,6 +63,39 @@ uses and its ports:
   reclaimers' claims, `SELECT ... FOR UPDATE SKIP LOCKED` ([Items](items.md#reclamation)).
 
 sqlint does not check the migrations' forms, so review holds the migrations list below.
+
+## Messaging
+
+The broker owns the stream `MIKOSHI`: its `Start` creates the stream or updates it to the `nats`
+block, capturing the subjects `mikoshi.>` and keeping each event for `max_age`, 168h. Every event
+type Mikoshi emits starts with `mikoshi.`, and each event is published with its type as its NATS
+subject. A domain emits through the runtime's recorder in its command's transaction, so the
+outbox row commits exactly when the change it reports does, and the relay publishes each committed
+outbox row to the broker. The relay holds the quiesce gate shared for each row, so it
+pauses while an admin verb holds the gate. `/readyz` lists `broker` and `relay`.
+
+Every event carries `source` `mikoshi`. The recorder stamps the `layer` extension `mikoshi` on
+every event, and each raise sets the `correlationid` extension through the
+[`correlation`](../correlation/doc.go) package: the request's id, which its response carries as
+`X-Request-Id`, or a fresh UUIDv7 when the command runs outside a request. No event carries
+`causationid`.
+
+The domains use go-messaging's base module alone, through the recorder the composition root
+hands them; `correlation` uses go-core's `event` package. Only the composition root imports
+the `nats` provider or the `postgres` engine, and the integration harness binds the stream as a
+consumer, never its owner, through the `nats` provider.
+
+The sweeper also runs the messaging tables' retentions, each scheduled by its block under
+`sweep`:
+
+| Reclaimer | What it removes | Defaults |
+|-----------|-----------------|----------|
+| `outbox_messages` | Outbox rows published more than `age` ago | `interval` 5m, `budget` 500, `age` 168h |
+| `inbox_messages` | Inbox rows handled more than `age` ago | `interval` 5m, `budget` 500, `age` 168h |
+
+Each field has an override, `MIKOSHI_SWEEP_<RECLAIMER>_<FIELD>`, such as
+`MIKOSHI_SWEEP_OUTBOX_MESSAGES_AGE`. The `messaging` and `nats` blocks take the
+`MIKOSHI_MESSAGING_*` and `MIKOSHI_NATS_*` overrides.
 
 ## What a provider swap changes
 

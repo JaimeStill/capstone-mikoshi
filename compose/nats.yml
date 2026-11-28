@@ -1,0 +1,22 @@
+# NATS with JetStream, built from compose/nats/Dockerfile: nats keeps its stream in a named volume,
+# and nats-integration, under the integration profile, keeps it on tmpfs.
+# See architecture/standards/go-elemental/principles/release-and-ci.md
+services:
+  nats:
+    build:
+      context: nats
+    ports:
+      - "127.0.0.1:${NATS_PORT:-4228}:4222"
+    volumes:
+      - mikoshi-nats:/data
+
+  nats-integration:
+    profiles: [integration]
+    build:
+      context: nats
+    ports:
+      - "127.0.0.1:${NATS_PORT:-4229}:4222"
+    tmpfs: /data
+
+volumes:
+  mikoshi-nats:

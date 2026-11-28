@@ -76,7 +76,8 @@ take `page` and `size` or the `cursor` the previous page returned, and refuse `s
 `PUT /api/contexts/{id}/items/{item}` places an item in an explicit context, and `DELETE` on the
 same path withdraws it. Both answer 204 whether or not the reference was in place before. A
 query context's contents are what its filter selects, so a reference to one is refused with a
-409. A reference reads its context before it writes and takes no tree lock: a context's kind
+409. A reference reads its context before it writes, writes in a transaction of its own so its
+event commits with it ([Events](#events)), and takes no tree lock: a context's kind
 never changes, a context deleted between the read and the write fails the reference's foreign
 key, and one deleted after takes its references with it by cascade.
 
@@ -112,9 +113,10 @@ making it fresh, and the reclaimer passes it by.
 
 ## Reclamation
 
-go-database's sweeper, the composition root's one reactor
+go-database's sweeper, a reactor of the composition root
 ([`internal/app/reactors.go`](../internal/app/reactors.go)), runs three reclaimers, each owned by
-the domain whose data it removes. Each is scheduled by its block under `sweep`: the least time
+the domain whose data it removes, beside the messaging tables' two retentions
+([Stack](stack.md#messaging)). Each is scheduled by its block under `sweep`: the least time
 between the starts of two of its passes (`interval`) and the most units one pass removes
 (`budget`). The sweeper takes a session advisory lock per reclaimer, `sweep.<name>`, a prefix
 [`data/locks.go`](../data/locks.go) reserves, so two replicas never run one reclaimer at once. The
@@ -138,6 +140,30 @@ remaining chunk's text names.
 
 Each field has an override, `MIKOSHI_SWEEP_<RECLAIMER>_<FIELD>`, such as
 `MIKOSHI_SWEEP_ORPHAN_BLOBS_STALE_AGE`, and each value must be positive.
+
+## Events
+
+Each command that changes an item or a reference emits one event, written to the outbox in the
+transaction that makes the change ([`domain/items/messaging.go`](../domain/items/messaging.go)),
+and published to the `MIKOSHI` stream once that transaction commits. A command that is refused,
+fails, or changes nothing emits nothing: a completion that returns an item an earlier or
+overlapping completion created, placing a reference already in place, and withdrawing one not in
+place answer as before and publish no event. Reads, the covered read, and the
+reclaimers emit nothing; a reclaimer removing an orphaned blob is not an item command.
+
+| Type | Subject | Command | Data |
+|------|---------|---------|------|
+| `mikoshi.item.created` | The item's id | A file or a record create | `{"id", "type", "name", "media_type", "sha256", "size", "route", "kind", "duration"}` |
+| `mikoshi.item.deleted` | The item's id | Delete | `{"id"}` |
+| `mikoshi.context.item.added` | The context's id | Place a reference | `{"context_id", "item_id"}` |
+| `mikoshi.context.item.removed` | The context's id | Withdraw a reference | `{"context_id", "item_id"}` |
+
+A created item's data is the item as the read presents it, without `created_at`, its `type`
+`file` or `record`. A file's event is written by the transaction that creates the item: the
+first transaction when the blob is already `available`, otherwise the second, which marks the
+blob ([The blob protocol](#the-blob-protocol)). A delete emits one event, on the item; the
+references it removes with the item emit none. Every event carries the attributes and extensions
+[Stack](stack.md#messaging) lists.
 
 ## The HTTP API
 

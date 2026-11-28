@@ -20,12 +20,13 @@ type Service struct {
 	fields []query.Field
 }
 
-// New constructs the service over the database the domains share and
-// fields, the field contract a query context's filter is checked against:
-// the fields a filter may name, each with the SQL type its value is cast
-// to. Construction compiles and binds the statements and performs no I/O.
-func New(db *data.Database, fields []query.Field) *Service {
-	return &Service{store: newStore(db), fields: fields}
+// New constructs the service over the database the domains share, fields,
+// the field contract a query context's filter is checked against: the
+// fields a filter may name, each with the SQL type its value is cast to,
+// and events, the recorder its commands emit their events through.
+// Construction compiles and binds the statements and performs no I/O.
+func New(db *data.Database, fields []query.Field, events *Recorder) *Service {
+	return &Service{store: newStore(db, events), fields: fields}
 }
 
 // Find returns the context with the given id, the root's included, or
@@ -51,13 +52,13 @@ func (s *Service) Children(ctx context.Context, id string, q web.Query) ([]Conte
 	return s.store.listChildren(ctx, id, q)
 }
 
-// Create creates a context under the stated parent, with an id the
-// service mints, and returns it as the read presents it. It takes the
-// tree lock before it reads the parent: a missing parent is
-// ErrParentNotFound, a query parent ErrQueryParent, and a name a sibling
-// holds ErrNameTaken. A query context's filter is checked against the
-// service's field contract before the store, a condition that does not
-// fit it ErrValidation naming the condition's index.
+// Create creates a context under the stated parent, with an id the service
+// mints, and returns it as the read presents it, emitting ContextCreated in
+// its transaction. It takes the tree lock before it reads the parent: a
+// missing parent is ErrParentNotFound, a query parent ErrQueryParent, and a
+// name a sibling holds ErrNameTaken. A query context's filter is checked
+// against the service's field contract before the store, a condition that
+// does not fit it ErrValidation naming the condition's index.
 func (s *Service) Create(ctx context.Context, c CreateContext) (Context, error) {
 	if err := c.Validate(); err != nil {
 		return Context{}, err
@@ -71,8 +72,10 @@ func (s *Service) Create(ctx context.Context, c CreateContext) (Context, error) 
 }
 
 // Rename sets the name of the context with the given id, its parent
-// unchanged, and returns it as the read presents it. A malformed id or an
-// empty name is ErrValidation, the root ErrRootFixed, an unknown context
+// unchanged, and returns it as the read presents it, emitting
+// ContextRenamed in its transaction; a rename to the name the context
+// already has returns it and emits nothing. A malformed id or an empty
+// name is ErrValidation, the root ErrRootFixed, an unknown context
 // sql.ErrNoRows, and a name a sibling holds ErrNameTaken. Its one
 // statement changes no context's parent, and the sibling-name constraint
 // holds against every concurrent change, so it takes no tree lock.
@@ -94,11 +97,12 @@ func (s *Service) Rename(ctx context.Context, id string, r RenameContext) (Conte
 // command names one, its name, and returns it as the read presents it; its
 // subtree moves with it. In one transaction it takes the tree lock, reads
 // the context and the new parent, and walks the new parent's ancestors
-// before it writes. A malformed id or command is ErrValidation, the root
-// ErrRootFixed, an unknown context sql.ErrNoRows, a missing parent
-// ErrParentNotFound, a query parent ErrQueryParent, a parent that is the
-// context or one of its descendants ErrCycle, and a name a sibling under
-// the new parent holds ErrNameTaken.
+// before it writes, then emits ContextMoved; a move to the parent and the
+// name the context already has returns it and emits nothing. A malformed id
+// or command is ErrValidation, the root ErrRootFixed, an unknown context
+// sql.ErrNoRows, a missing parent ErrParentNotFound, a query parent
+// ErrQueryParent, a parent that is the context or one of its descendants
+// ErrCycle, and a name a sibling under the new parent holds ErrNameTaken.
 func (s *Service) Move(ctx context.Context, id string, m MoveContext) (Context, error) {
 	parsed, err := uuid.Parse(id)
 	if err != nil {
@@ -126,8 +130,9 @@ func (s *Service) Subtree(ctx context.Context, id string) ([]Node, error) {
 // Delete removes the context with the given id and its whole subtree when
 // confirm is the number of its descendants, the context itself excluded:
 // zero, a leaf's count, needs no confirmation from the caller. In one
-// transaction it takes the tree lock, counts the descendants, and deletes
-// the subtree in one statement. A malformed id or a negative confirm is
+// transaction it takes the tree lock, counts the descendants, deletes
+// the subtree in one statement, and emits one ContextDeleted, on the
+// context itself. A malformed id or a negative confirm is
 // ErrValidation, the root ErrRootFixed, an unknown context sql.ErrNoRows,
 // and a confirm that is not the count a *DescendantsError carrying it.
 func (s *Service) Delete(ctx context.Context, id string, confirm int64) error {

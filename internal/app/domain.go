@@ -24,7 +24,7 @@ func defineDomain(g *graph.Graph, n *Nodes) {
 
 func (n *Nodes) newContexts(s *graph.Scope) (*contexts.Service, error) {
 	db := s.Use(n.SQL)
-	return contexts.New(db, items.FilterFields(db)), nil
+	return contexts.New(db, items.FilterFields(db), s.Use(n.Runtime).Recorder), nil
 }
 
 func (n *Nodes) newUploads(s *graph.Scope) (*uploads.Service, error) {
@@ -32,7 +32,7 @@ func (n *Nodes) newUploads(s *graph.Scope) (*uploads.Service, error) {
 }
 
 func (n *Nodes) newItems(s *graph.Scope) (*items.Service, error) {
-	return items.New(s.Use(n.SQL), s.Use(n.Storage), s.Use(n.Contexts)), nil
+	return items.New(s.Use(n.SQL), s.Use(n.Storage), s.Use(n.Contexts), s.Use(n.Runtime).Recorder), nil
 }
 
 func mountAPI(s *graph.Scope, n *Nodes) *web.Group {

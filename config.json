@@ -25,6 +25,16 @@
       "region": "us-east-1"
     }
   },
+  "messaging": {
+    "source": "mikoshi"
+  },
+  "nats": {
+    "name": "mikoshi",
+    "stream": "MIKOSHI",
+    "prefix": "mikoshi",
+    "owner": true,
+    "max_age": "168h"
+  },
   "reads": {
     "default_size": 20,
     "max_size": 100
@@ -47,6 +57,16 @@
       "interval": "15m",
       "budget": 100,
       "stale_age": "24h"
+    },
+    "outbox_messages": {
+      "interval": "5m",
+      "budget": 500,
+      "age": "168h"
+    },
+    "inbox_messages": {
+      "interval": "5m",
+      "budget": 500,
+      "age": "168h"
     }
   },
   "shutdown_timeout": "10s"

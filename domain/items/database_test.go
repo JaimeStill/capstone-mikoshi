@@ -18,6 +18,8 @@ import (
 	"time"
 	"uuid"
 
+	"github.com/standards-lab/go-messaging/outbox"
+	msgpg "github.com/standards-lab/go-messaging/postgres"
 	"github.com/standards-lab/go-storage"
 	"github.com/standards-lab/go-storage/storagetest"
 	"github.com/standards-lab/go-web-sdk"
@@ -28,6 +30,7 @@ import (
 	"github.com/JaimeStill/capstone-mikoshi/data"
 	"github.com/JaimeStill/capstone-mikoshi/domain/contexts"
 	"github.com/JaimeStill/capstone-mikoshi/domain/items"
+	"github.com/JaimeStill/capstone-mikoshi/internal/outboxtest"
 )
 
 const (
@@ -63,8 +66,20 @@ func service(t *testing.T, responses ...sqltest.Response) fixture {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = objects.Shutdown(context.Background()) })
-	return fixture{service: items.New(db, objects, contexts.New(db, items.FilterFields(db))), rec: rec, fake: fake}
+	events := recorder(t)
+	return fixture{service: items.New(db, objects, contexts.New(db, items.FilterFields(db), events), events), rec: rec, fake: fake}
 }
+
+func recorder(t *testing.T) *items.Recorder {
+	t.Helper()
+	ob, err := outbox.New(msgpg.Outbox())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return outboxtest.Stamped(ob.Sink())
+}
+
+func eventWritten() sqltest.Response { return sqltest.Response{Affected: 1} }
 
 func digest(content []byte) string {
 	sum := sha256.Sum256(content)
@@ -132,7 +147,7 @@ func callsTo(rec *sqltest.Recorder, prefix string) []sqltest.Call {
 }
 
 func TestService_CreateFileWritesThePendingRowThenTheObjectThenMarksIt(t *testing.T) {
-	f := service(t, none(), none(), none(), affected(1), affected(1), itemRow(pdf, "document", "pdf"))
+	f := service(t, none(), none(), none(), affected(1), affected(1), itemRow(pdf, "document", "pdf"), eventWritten())
 	item, err := f.service.CreateFile(t.Context(), file(pdf), bytes.NewReader(pdf))
 	if err != nil {
 		t.Fatal(err)
@@ -143,7 +158,7 @@ func TestService_CreateFileWritesThePendingRowThenTheObjectThenMarksIt(t *testin
 	if want := time.Date(2026, 11, 27, 11, 0, 0, 0, time.UTC); item.CreatedAt != want {
 		t.Errorf("created_at = %v, want %v", item.CreatedAt, want)
 	}
-	sameOps(t, f.rec, q, begin, q, q, x, commit, begin, x, q, commit)
+	sameOps(t, f.rec, q, begin, q, q, x, commit, begin, x, q, x, commit)
 	if f.fake.Puts() != 1 || !bytes.Equal(stored(t, f, pdf), pdf) {
 		t.Errorf("puts = %d, want the content written once at its digest's key", f.fake.Puts())
 	}
@@ -178,11 +193,11 @@ func TestService_CreateFileWritesThePendingRowThenTheObjectThenMarksIt(t *testin
 }
 
 func TestService_CreateFileOverAvailableContentWritesNoObject(t *testing.T) {
-	f := service(t, none(), blob(pdf, "available"), itemRow(pdf, "document", "pdf"))
+	f := service(t, none(), blob(pdf, "available"), itemRow(pdf, "document", "pdf"), eventWritten())
 	if _, err := f.service.CreateFile(t.Context(), file(pdf), bytes.NewReader(pdf)); err != nil {
 		t.Fatal(err)
 	}
-	sameOps(t, f.rec, q, begin, q, q, commit)
+	sameOps(t, f.rec, q, begin, q, q, x, commit)
 	if f.fake.Puts() != 0 {
 		t.Errorf("puts = %d, want none for available content", f.fake.Puts())
 	}
@@ -192,11 +207,11 @@ func TestService_CreateFileOverAvailableContentWritesNoObject(t *testing.T) {
 }
 
 func TestService_CreateFileWritesAPendingBlobsObjectAgain(t *testing.T) {
-	f := service(t, none(), blob(pdf, "pending"), affected(1), itemRow(pdf, "document", "pdf"))
+	f := service(t, none(), blob(pdf, "pending"), affected(1), itemRow(pdf, "document", "pdf"), eventWritten())
 	if _, err := f.service.CreateFile(t.Context(), file(pdf), bytes.NewReader(pdf)); err != nil {
 		t.Fatal(err)
 	}
-	sameOps(t, f.rec, q, begin, q, commit, begin, x, q, commit)
+	sameOps(t, f.rec, q, begin, q, commit, begin, x, q, x, commit)
 	if f.fake.Puts() != 1 || !bytes.Equal(stored(t, f, pdf), pdf) {
 		t.Errorf("puts = %d, want the pending blob's object written", f.fake.Puts())
 	}
@@ -262,12 +277,12 @@ func TestService_CreateFileStartsOverWhenTheBlobRowChanges(t *testing.T) {
 	}{
 		{"a row reclaimed while its object was written", []sqltest.Response{
 			none(), none(), none(), affected(1), affected(0),
-			none(), none(), affected(1), affected(1), itemRow(pdf, "document", "pdf"),
-		}, []sqltest.Op{q, begin, q, q, x, commit, begin, x, rollback, begin, q, q, x, commit, begin, x, q, commit}, 2},
+			none(), none(), affected(1), affected(1), itemRow(pdf, "document", "pdf"), eventWritten(),
+		}, []sqltest.Op{q, begin, q, q, x, commit, begin, x, rollback, begin, q, q, x, commit, begin, x, q, x, commit}, 2},
 		{"a row inserted concurrently", []sqltest.Response{
 			none(), none(), none(), violation("pk_blob"),
-			blob(pdf, "pending"), affected(1), itemRow(pdf, "document", "pdf"),
-		}, []sqltest.Op{q, begin, q, q, x, rollback, begin, q, commit, begin, x, q, commit}, 1},
+			blob(pdf, "pending"), affected(1), itemRow(pdf, "document", "pdf"), eventWritten(),
+		}, []sqltest.Op{q, begin, q, q, x, rollback, begin, q, commit, begin, x, q, x, commit}, 1},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -368,7 +383,7 @@ func recordRow(content []byte) sqltest.Response {
 }
 
 func TestService_CreateRecordStoresTheBytesAsAJSONBlob(t *testing.T) {
-	f := service(t, none(), none(), affected(1), affected(1), recordRow(record))
+	f := service(t, none(), none(), affected(1), affected(1), recordRow(record), eventWritten())
 	item, err := f.service.CreateRecord(t.Context(), items.CreateRecord{Name: "notes.json"}, record)
 	if err != nil {
 		t.Fatal(err)
@@ -376,7 +391,7 @@ func TestService_CreateRecordStoresTheBytesAsAJSONBlob(t *testing.T) {
 	if item.ID != itemID || item.Type != items.TypeRecord || item.MediaType != "application/json" {
 		t.Errorf("CreateRecord = %+v", item)
 	}
-	sameOps(t, f.rec, begin, q, q, x, commit, begin, x, q, commit)
+	sameOps(t, f.rec, begin, q, q, x, commit, begin, x, q, x, commit)
 	if f.fake.Puts() != 1 || !bytes.Equal(stored(t, f, record), record) {
 		t.Errorf("puts = %d, want the record's exact bytes written once at its digest's key", f.fake.Puts())
 	}
@@ -395,13 +410,13 @@ func TestService_CreateRecordStoresTheBytesAsAJSONBlob(t *testing.T) {
 }
 
 func TestService_CreateRecordTwiceCreatesTwoItemsOverOneBlob(t *testing.T) {
-	f := service(t, blob(record, "available"), recordRow(record), blob(record, "available"), recordRow(record))
+	f := service(t, blob(record, "available"), recordRow(record), eventWritten(), blob(record, "available"), recordRow(record), eventWritten())
 	for range 2 {
 		if _, err := f.service.CreateRecord(t.Context(), items.CreateRecord{Name: "notes.json"}, record); err != nil {
 			t.Fatal(err)
 		}
 	}
-	sameOps(t, f.rec, begin, q, q, commit, begin, q, q, commit)
+	sameOps(t, f.rec, begin, q, q, x, commit, begin, q, q, x, commit)
 	if n := len(callsTo(f.rec, "INSERT INTO item")); n != 2 {
 		t.Errorf("item inserts = %d, want two", n)
 	}
@@ -473,7 +488,7 @@ func TestService_CreateFileRoutesTheWholeContent(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			f := service(t, none(), blob(c.content, "available"), itemRow(c.content, c.route, nil))
+			f := service(t, none(), blob(c.content, "available"), itemRow(c.content, c.route, nil), eventWritten())
 			cmd := items.CreateFile{UploadID: uploadID, Name: c.fileName, MediaType: c.mediaType, SHA256: digest(c.content), Size: int64(len(c.content))}
 			if _, err := f.service.CreateFile(t.Context(), cmd, bytes.NewReader(c.content)); err != nil {
 				t.Fatal(err)
@@ -534,11 +549,11 @@ func foreignKey(constraint string) sqltest.Response {
 }
 
 func TestService_PlaceReadsTheContextThenInsertsTheReference(t *testing.T) {
-	f := service(t, contextRow(contexts.KindExplicit), affected(1))
+	f := service(t, contextRow(contexts.KindExplicit), affected(1), eventWritten())
 	if err := f.service.Place(t.Context(), contextID, itemID); err != nil {
 		t.Fatal(err)
 	}
-	sameOps(t, f.rec, q, x)
+	sameOps(t, f.rec, q, begin, x, x, commit)
 	if find := f.rec.Calls()[0]; !strings.HasSuffix(find.SQL, "FROM context WHERE id = CAST($1 AS uuid)") || find.Args[0] != contextID {
 		t.Errorf("context read = %+v", find)
 	}
@@ -553,6 +568,7 @@ func TestService_PlaceRepeatedChangesNothing(t *testing.T) {
 	if err := f.service.Place(t.Context(), contextID, itemID); err != nil {
 		t.Errorf("Place = %v, want the reference left in place", err)
 	}
+	sameOps(t, f.rec, q, begin, x, rollback)
 }
 
 func TestService_PlaceRefusals(t *testing.T) {
@@ -568,8 +584,8 @@ func TestService_PlaceRefusals(t *testing.T) {
 		{"a malformed item id", contextID, "x", nil, items.ErrValidation, nil},
 		{"an unknown context", contextID, itemID, []sqltest.Response{none()}, items.ErrContextNotFound, []sqltest.Op{q}},
 		{"a query context", contextID, itemID, []sqltest.Response{contextRow(contexts.KindQuery)}, items.ErrQueryContext, []sqltest.Op{q}},
-		{"an unknown item", contextID, itemID, []sqltest.Response{contextRow(contexts.KindExplicit), foreignKey("fk_context_item_item")}, items.ErrItemNotFound, []sqltest.Op{q, x}},
-		{"a context deleted after its read", contextID, itemID, []sqltest.Response{contextRow(contexts.KindExplicit), foreignKey("fk_context_item_context")}, items.ErrContextNotFound, []sqltest.Op{q, x}},
+		{"an unknown item", contextID, itemID, []sqltest.Response{contextRow(contexts.KindExplicit), foreignKey("fk_context_item_item")}, items.ErrItemNotFound, []sqltest.Op{q, begin, x, rollback}},
+		{"a context deleted after its read", contextID, itemID, []sqltest.Response{contextRow(contexts.KindExplicit), foreignKey("fk_context_item_context")}, items.ErrContextNotFound, []sqltest.Op{q, begin, x, rollback}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -583,11 +599,11 @@ func TestService_PlaceRefusals(t *testing.T) {
 }
 
 func TestService_WithdrawDeletesTheReference(t *testing.T) {
-	f := service(t, contextRow(contexts.KindExplicit), affected(1))
+	f := service(t, contextRow(contexts.KindExplicit), affected(1), eventWritten())
 	if err := f.service.Withdraw(t.Context(), contextID, itemID); err != nil {
 		t.Fatal(err)
 	}
-	sameOps(t, f.rec, q, x)
+	sameOps(t, f.rec, q, begin, x, x, commit)
 	del := callsTo(f.rec, "DELETE FROM context_item")
 	if len(del) != 1 || del[0].Args[0] != contextID || del[0].Args[1] != itemID {
 		t.Errorf("reference delete = %+v, want the context and the item", del)
@@ -599,7 +615,7 @@ func TestService_WithdrawAnAbsentReferenceChangesNothing(t *testing.T) {
 	if err := f.service.Withdraw(t.Context(), contextID, itemID); err != nil {
 		t.Errorf("Withdraw = %v, want the reference left absent", err)
 	}
-	sameOps(t, f.rec, q, x, q)
+	sameOps(t, f.rec, q, begin, x, q, commit)
 }
 
 func TestService_WithdrawRefusals(t *testing.T) {
@@ -615,7 +631,7 @@ func TestService_WithdrawRefusals(t *testing.T) {
 		{"a malformed item id", contextID, "x", nil, items.ErrValidation, nil},
 		{"an unknown context", contextID, itemID, []sqltest.Response{none()}, items.ErrContextNotFound, []sqltest.Op{q}},
 		{"a query context", contextID, itemID, []sqltest.Response{contextRow(contexts.KindQuery)}, items.ErrQueryContext, []sqltest.Op{q}},
-		{"an unknown item", contextID, itemID, []sqltest.Response{contextRow(contexts.KindExplicit), affected(0), none()}, items.ErrItemNotFound, []sqltest.Op{q, x, q}},
+		{"an unknown item", contextID, itemID, []sqltest.Response{contextRow(contexts.KindExplicit), affected(0), none()}, items.ErrItemNotFound, []sqltest.Op{q, begin, x, q, rollback}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -821,7 +837,7 @@ func TestStore_RegistersAndVerifiesEveryStatement(t *testing.T) {
 		cfg := storage.Config{Container: "items"}
 		_ = cfg.Finalize("")
 		return cfg
-	}()), contexts.New(db, items.FilterFields(db)))
+	}()), contexts.New(db, items.FilterFields(db), nil), nil)
 
 	var entry *query.Statements
 	for _, e := range db.Registry() {
@@ -955,11 +971,11 @@ func TestPendingReclaimer_PassKeepsTheRowWhenTheObjectDeleteFails(t *testing.T) 
 }
 
 func TestService_DeleteTouchesTheBlobThenDeletesTheReferencesAndTheItem(t *testing.T) {
-	f := service(t, affected(1), affected(2), affected(1))
+	f := service(t, affected(1), affected(2), affected(1), eventWritten())
 	if err := f.service.Delete(t.Context(), itemID); err != nil {
 		t.Fatal(err)
 	}
-	sameOps(t, f.rec, begin, x, x, x, commit)
+	sameOps(t, f.rec, begin, x, x, x, x, commit)
 	calls := f.rec.Calls()
 	for i, want := range []string{
 		"UPDATE blob SET updated_at = CURRENT_TIMESTAMP WHERE sha256 = (SELECT i.sha256 FROM item i WHERE i.id = CAST($1 AS uuid))",

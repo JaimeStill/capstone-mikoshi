@@ -22,4 +22,6 @@
 //     migrations/. The
 //     migrations use pgvector's vector type and HNSW index method; the
 //     composition root declares the extension to the migrator.
+//   - [Seeder]: the admin service's seeder over Mikoshi's one seed state,
+//     [StateEmpty], which writes nothing.
 package data
